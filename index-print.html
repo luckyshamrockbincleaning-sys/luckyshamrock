@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Lucky Shamrock — Residential Bin Cleaning</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+
+  <link rel="stylesheet" href="styles.css"/>
+
+  <style>
+    /* Print + screen prep for print preview */
+    @page {
+      size: A4 portrait;
+      margin: 0.4cm;
+    }
+
+    @media print {
+      html, body {
+        background: var(--paper) !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      * {
+        animation: none !important;
+        transition: none !important;
+      }
+
+      /* Hide interactive chrome */
+      .nav, .tweaks-panel, [class*="tweaks"] {
+        display: none !important;
+      }
+
+      /* Ensure backgrounds print */
+      .beforeafter, .how, .pricing, .booking, .testimonials, .faq,
+      .footer-pre, footer, .price-card, .how-step, .testimonial-card,
+      .booking-card, .faq-item, .float-chip, .area-pill,
+      .marquee, .ba-stamp, .booking-step-pill,
+      .ba-half, .ba-half.before, .ba-half.after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      /* Sections start on new page */
+      .beforeafter,
+      .how,
+      .pricing,
+      .booking,
+      .testimonials,
+      .faq,
+      .footer-pre {
+        break-before: page;
+        page-break-before: always;
+      }
+
+      section, footer {
+        padding: 40px 0 !important;
+        break-inside: avoid;
+      }
+
+      .hero { padding-top: 20px !important; }
+
+      /* Force Before/After to show both halves at 50% */
+      .ba-after-wrap {
+        clip-path: inset(0 0 0 50%) !important;
+      }
+      .ba-handle { left: 50% !important; }
+      .ba-stage { cursor: default !important; }
+
+      /* Scale down headings slightly for print */
+      h1 { font-size: 56px !important; }
+      h2 { font-size: 38px !important; }
+      h3 { font-size: 22px !important; }
+
+      /* Avoid breaking cards/sections internally */
+      .price-card, .how-step, .testimonial-card,
+      .faq-item, .booking-card, .footer-grid,
+      .hero-grid, .ba-stage, .how-steps,
+      .pricing-grid, .testimonials-grid, .booking-grid {
+        break-inside: avoid;
+      }
+
+      /* The body::before gradient overlay can interfere with page breaks; constrain */
+      body::before {
+        position: fixed !important;
+        height: 100vh !important;
+        opacity: 0.6;
+      }
+
+      /* Brand mark — keep visible but constrain so it doesn't push content */
+      .brand-mark {
+        margin: 0 !important;
+        width: 140px !important;
+        height: 140px !important;
+      }
+
+      /* Tweaks panel hidden */
+      [class*="twk-"], [class*="tweak"] { display: none !important; }
+    }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="components-core.jsx"></script>
+  <script type="text/babel" src="components-mid.jsx"></script>
+  <script type="text/babel" src="components-booking.jsx"></script>
+  <script type="text/babel" src="components-footer.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+
+  <script type="text/babel">
+    // Auto-print once fonts + React + images have settled.
+    (async function autoPrint() {
+      try {
+        if (document.fonts && document.fonts.ready) {
+          await document.fonts.ready;
+        }
+        // Wait for React app to mount + images
+        const waitForRoot = () => new Promise((resolve) => {
+          const tick = () => {
+            const root = document.getElementById('root');
+            if (root && root.children.length > 0) return resolve();
+            setTimeout(tick, 100);
+          };
+          tick();
+        });
+        await waitForRoot();
+
+        // Wait for all <img> to finish loading
+        const imgs = [...document.images];
+        await Promise.all(imgs.map(img => img.complete ? null :
+          new Promise(r => { img.onload = img.onerror = r; })));
+
+        await new Promise(r => setTimeout(r, 800));
+        window.print();
+      } catch (e) {
+        console.error('autoPrint failed', e);
+        setTimeout(() => window.print(), 1500);
+      }
+    })();
+  </script>
+</body>
+</html>
