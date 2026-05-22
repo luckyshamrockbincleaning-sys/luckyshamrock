@@ -1,0 +1,32 @@
+{
+  "name": "luckyshamrock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lucky Shamrock Bin Cleaning — marketing site + booking system",
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "test": "dotenv -e .env.local -- vitest run",
+    "test:watch": "dotenv -e .env.local -- vitest",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "dotenv -e .env.local -- drizzle-kit generate",
+    "db:push": "dotenv -e .env.local -- drizzle-kit push",
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.36.0",
+    "postgres": "^3.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vercel/node": "^5.0.0",
+    "dotenv-cli": "^7.4.2",
+    "drizzle-kit": "^0.30.0",
+    "typescript": "^5.6.0",
+    "vercel": "^39.0.0",
+    "vitest": "^2.1.0"
+  }
+}
