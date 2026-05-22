@@ -9,3 +9,9 @@ build/
 .env
 .env.local
 .env.*.local
+
+# Vercel
+.vercel/
+
+# Vitest
+coverage/
