@@ -21,8 +21,10 @@ export default async function handler(
       status: dbOk ? 'ok' : 'degraded',
       db: dbOk,
       time,
+      error: null,
     });
   } catch (err) {
+    console.error('[health] db check failed', err);
     const message = err instanceof Error ? err.message : 'unknown_error';
     res.status(503).json({
       status: 'degraded',

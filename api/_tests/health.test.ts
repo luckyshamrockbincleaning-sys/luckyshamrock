@@ -37,10 +37,11 @@ describe('GET /api/health', () => {
     await handler(req, res as unknown as Parameters<typeof handler>[1]);
 
     expect(res.statusCode).toBe(200);
-    const body = res.body as { status: string; db: boolean; time: string };
+    const body = res.body as { status: string; db: boolean; time: string; error: string | null };
     expect(body.status).toBe('ok');
     expect(body.db).toBe(true);
     expect(typeof body.time).toBe('string');
+    expect(body.error).toBe(null);
   });
 
   it('returns 405 for non-GET methods', async () => {
