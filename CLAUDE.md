@@ -14,8 +14,8 @@ BinWash side-business — but built standalone, not on the BinWash Django stack.
   (Node 20 runtime).
 - **Database** = Neon Postgres. Accessed via `db/client.ts` (lazy singleton).
 - **Migrations** = `drizzle-kit` (`npm run db:generate`, `npm run db:push`).
-- **Tests** = `vitest`, files live in `**/_tests/*.test.ts`. Env loaded from
-  `.env.local` via `dotenv-cli`.
+- **Tests** = `vitest`, files live in `**/_tests/**/*.test.ts` (nested dirs
+  allowed). Env loaded from `.env.local` via `dotenv-cli`.
 
 ## Common commands
 

@@ -52,6 +52,7 @@ describe('GET /api/health — failure modes', () => {
     expect(body.status).toBe('degraded');
     expect(body.db).toBe(false);
     expect(body.error).toBe(null);
+    expect(typeof body.time).toBe('string');
   });
 
   it('returns 503 with db=false and an error message when DB throws', async () => {
@@ -65,5 +66,6 @@ describe('GET /api/health — failure modes', () => {
     expect(body.status).toBe('degraded');
     expect(body.db).toBe(false);
     expect(body.error).toBe('connection refused');
+    expect(typeof body.time).toBe('string');
   });
 });
