@@ -16,6 +16,7 @@ function init() {
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: false,
+    ssl: 'require',
   });
   _db = drizzle(_sql);
 }
