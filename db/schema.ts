@@ -112,20 +112,27 @@ export const visit = pgTable(
   },
   (t) => ({
     customerIdx: index('visit_customer_idx').on(t.customerId),
+    subscriptionIdx: index('visit_subscription_idx').on(t.subscriptionId),
     scheduledForIdx: index('visit_scheduled_for_idx').on(t.scheduledFor),
     statusIdx: index('visit_status_idx').on(t.status),
   }),
 );
 
-export const magicLinkToken = pgTable('magic_link_token', {
-  token: text('token').primaryKey(),
-  customerId: uuid('customer_id')
-    .notNull()
-    .references(() => customer.id, { onDelete: 'cascade' }),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  consumedAt: timestamp('consumed_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const magicLinkToken = pgTable(
+  'magic_link_token',
+  {
+    token: text('token').primaryKey(),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customer.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    customerIdx: index('magic_link_customer_idx').on(t.customerId),
+  }),
+);
 
 export const notificationLog = pgTable(
   'notification_log',
