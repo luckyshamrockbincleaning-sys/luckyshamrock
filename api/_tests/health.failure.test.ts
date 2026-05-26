@@ -1,33 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock the db client BEFORE importing the handler so the handler picks up the mock.
 const mockSql = vi.fn();
 vi.mock('../../db/client.js', () => ({
   getRawClient: () => mockSql,
 }));
 
 const { default: handler } = await import('../health.js');
-
-type MockRes = {
-  statusCode: number;
-  body: unknown;
-  status: (code: number) => MockRes;
-  json: (payload: unknown) => MockRes;
-};
-
-function mockReq(method = 'GET') {
-  return { method } as unknown as Parameters<typeof handler>[0];
-}
-
-function mockRes(): MockRes {
-  const res: MockRes = {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(payload) { this.body = payload; return this; },
-  };
-  return res;
-}
+const { mockReq, mockRes } = await import('./_helpers.js');
 
 describe('GET /api/health — failure modes', () => {
   let errSpy: ReturnType<typeof vi.spyOn>;
@@ -42,10 +21,10 @@ describe('GET /api/health — failure modes', () => {
   });
 
   it('returns 503 with db=false and error=null when DB returns unexpected data', async () => {
-    mockSql.mockResolvedValueOnce([{ ok: 0 }]); // not 1, so dbOk === false
-    const req = mockReq('GET');
-    const res = mockRes();
-    await handler(req, res as unknown as Parameters<typeof handler>[1]);
+    mockSql.mockResolvedValueOnce([{ ok: 0 }]);
+    const req = mockReq<typeof handler>({ method: 'GET' });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
 
     expect(res.statusCode).toBe(503);
     const body = res.body as { status: string; db: boolean; time: string; error: string | null };
@@ -57,9 +36,9 @@ describe('GET /api/health — failure modes', () => {
 
   it('returns 503 with db=false and an error message when DB throws', async () => {
     mockSql.mockRejectedValueOnce(new Error('connection refused'));
-    const req = mockReq('GET');
-    const res = mockRes();
-    await handler(req, res as unknown as Parameters<typeof handler>[1]);
+    const req = mockReq<typeof handler>({ method: 'GET' });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
 
     expect(res.statusCode).toBe(503);
     const body = res.body as { status: string; db: boolean; time: string; error: string | null };

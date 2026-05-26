@@ -1,28 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-
-// Import the handler (does not exist yet — test should FAIL with module not found).
 import handler from '../health.js';
-
-type MockRes = {
-  statusCode: number;
-  body: unknown;
-  status: (code: number) => MockRes;
-  json: (payload: unknown) => MockRes;
-};
-
-function mockReq(method = 'GET') {
-  return { method } as unknown as Parameters<typeof handler>[0];
-}
-
-function mockRes(): MockRes {
-  const res: MockRes = {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(payload) { this.body = payload; return this; },
-  };
-  return res;
-}
+import { mockReq, mockRes } from './_helpers.js';
 
 describe('GET /api/health', () => {
   beforeAll(() => {
@@ -32,9 +10,9 @@ describe('GET /api/health', () => {
   });
 
   it('returns 200 with status=ok and db=true when DB is reachable', async () => {
-    const req = mockReq('GET');
-    const res = mockRes();
-    await handler(req, res as unknown as Parameters<typeof handler>[1]);
+    const req = mockReq<typeof handler>({ method: 'GET' });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
 
     expect(res.statusCode).toBe(200);
     const body = res.body as { status: string; db: boolean; time: string; error: string | null };
@@ -45,9 +23,9 @@ describe('GET /api/health', () => {
   });
 
   it('returns 405 for non-GET methods', async () => {
-    const req = mockReq('POST');
-    const res = mockRes();
-    await handler(req, res as unknown as Parameters<typeof handler>[1]);
+    const req = mockReq<typeof handler>({ method: 'POST' });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
 
     expect(res.statusCode).toBe(405);
   });
