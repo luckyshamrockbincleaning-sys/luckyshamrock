@@ -30,3 +30,22 @@ export function getRawClient() {
   if (!_sql) init();
   return _sql!;
 }
+
+/**
+ * Test-only helper. Truncates all booking-domain tables in dependency order.
+ * Do NOT call from application code. Imported only by integration tests.
+ */
+export async function truncateAllForTests(): Promise<void> {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('truncateAllForTests must not run in production');
+  }
+  const sql = getRawClient();
+  await sql`TRUNCATE
+    notification_log,
+    magic_link_token,
+    visit,
+    subscription,
+    customer,
+    waitlist
+  CASCADE`;
+}
