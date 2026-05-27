@@ -1,0 +1,94 @@
+/**
+ * Email templates for Phase 2. Each export is a pure function returning
+ * { subject, html, text }. HTML is intentionally minimal — focused on
+ * readability across mail clients, not visual design.
+ *
+ * Templates live in one file because none are big enough to warrant their
+ * own. If any grows past ~40 lines, split it out.
+ */
+
+export interface RenderedEmail {
+  subject: string;
+  html: string;
+  text: string;
+}
+
+const FOOTER_HTML = '<p style="color:#888;font-size:12px;margin-top:32px">Lucky Shamrock Bin Cleaning · Fort Saskatchewan</p>';
+const FOOTER_TEXT = '--\nLucky Shamrock Bin Cleaning · Fort Saskatchewan';
+
+export function bookingConfirmedTemplate(p: {
+  name: string;
+  firstVisitDate: string;
+  manageUrl: string;
+}): RenderedEmail {
+  const subject = `You're booked with Lucky Shamrock`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `You're confirmed. Your first clean is scheduled for ${p.firstVisitDate}.\n\n` +
+    `Manage your booking: ${p.manageUrl}\n\n` +
+    FOOTER_TEXT;
+  const html =
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>You're confirmed. Your first clean is scheduled for <strong>${escapeHtml(p.firstVisitDate)}</strong>.</p>` +
+    `<p><a href="${escapeAttr(p.manageUrl)}">Manage your booking</a></p>` +
+    FOOTER_HTML;
+  return { subject, html, text };
+}
+
+export function magicLinkTemplate(p: { manageUrl: string }): RenderedEmail {
+  const subject = `Your Lucky Shamrock manage link`;
+  const text =
+    `Click to manage your booking (link expires in 15 minutes):\n\n${p.manageUrl}\n\n` +
+    `If you didn't request this, ignore this email.\n\n` +
+    FOOTER_TEXT;
+  const html =
+    `<p>Click to manage your booking (link expires in 15 minutes):</p>` +
+    `<p><a href="${escapeAttr(p.manageUrl)}">${escapeHtml(p.manageUrl)}</a></p>` +
+    `<p style="color:#666">If you didn't request this, ignore this email.</p>` +
+    FOOTER_HTML;
+  return { subject, html, text };
+}
+
+export function onOurWayTemplate(p: { name: string }): RenderedEmail {
+  const subject = `We're on the way`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `Lucky Shamrock is heading to your bins now. We'll be in and out — no need to be home.\n\n` +
+    FOOTER_TEXT;
+  const html =
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>Lucky Shamrock is heading to your bins now. We'll be in and out — no need to be home.</p>` +
+    FOOTER_HTML;
+  return { subject, html, text };
+}
+
+export function doneTemplate(p: { name: string; nextVisitDate: string | null }): RenderedEmail {
+  const subject = `Your bins are clean`;
+  const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `Bins cleaned. ${nextLine}\n\n` +
+    FOOTER_TEXT;
+  const html =
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>Bins cleaned. ${escapeHtml(nextLine)}</p>` +
+    FOOTER_HTML;
+  return { subject, html, text };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Helpers (intentionally simple — no general-purpose escape lib)
+// ─────────────────────────────────────────────────────────────────────
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(s: string): string {
+  return escapeHtml(s);
+}
