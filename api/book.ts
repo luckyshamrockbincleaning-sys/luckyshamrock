@@ -1,11 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
-import { customer, subscription, visit } from '../db/schema.js';
+import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
 import { bookRequestSchema } from '../lib/validation.js';
 import { isInServiceArea, normalizePostalCode } from '../lib/postal.js';
 import { generateVisitDates, type Cadence } from '../lib/schedule.js';
-import { sendEmail } from '../lib/email.js';
+import { sendAndLog } from '../lib/notifications.js';
+import { bookingConfirmedTemplate, magicLinkTemplate } from '../lib/email/templates.js';
+import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
 
 const RECURRING_COUNT: Record<Cadence, number> = {
   monthly: 12,
@@ -104,28 +106,53 @@ export default async function handler(
       });
     }
 
-    await db.insert(visit).values(
-      visitDates.map((scheduledFor) => ({
-        id: crypto.randomUUID(),
-        customerId,
-        subscriptionId,
-        scheduledFor,
-      })),
-    );
+    const visitRows = visitDates.map((scheduledFor) => ({
+      id: crypto.randomUUID(),
+      customerId,
+      subscriptionId,
+      scheduledFor,
+    }));
+    await db.insert(visit).values(visitRows);
+    const firstVisitId = visitRows[0]?.id ?? null;
 
-    // Stubbed emails (Phase 2 wires real Gmail send)
     const firstVisitDate = visitDates[0]!.toISOString().slice(0, 10);
-    await sendEmail({
+    const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
+
+    // Issue a fresh magic-link token
+    const tokenPlain = generateMagicLinkToken();
+    await db.insert(magicLinkToken).values({
+      token: hashToken(tokenPlain),
+      customerId,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+    const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(tokenPlain)}`;
+
+    // Send booking_confirmed — idempotent on (firstVisitId, 'booking_confirmed')
+    const bookingTemplate = bookingConfirmedTemplate({
+      name: data.name,
+      firstVisitDate,
+      manageUrl,
+    });
+    await sendAndLog({
       kind: 'booking_confirmed',
       to: data.email,
-      subject: 'You are booked with Lucky Shamrock',
-      body: `Hi ${data.name},\n\nYour first clean is scheduled for ${firstVisitDate}.\n\nManage your booking: https://www.luckyshamrock.ca/manage`,
+      subject: bookingTemplate.subject,
+      body: bookingTemplate.text,
+      html: bookingTemplate.html,
+      customerId,
+      visitId: firstVisitId,
     });
-    await sendEmail({
+
+    // Send magic_link — visitId: null, no idempotency check (each booking issues a fresh token)
+    const mlTemplate = magicLinkTemplate({ manageUrl });
+    await sendAndLog({
       kind: 'magic_link',
       to: data.email,
-      subject: 'Your Lucky Shamrock manage link',
-      body: `Click to manage: https://www.luckyshamrock.ca/manage?token=PLACEHOLDER`,
+      subject: mlTemplate.subject,
+      body: mlTemplate.text,
+      html: mlTemplate.html,
+      customerId,
+      visitId: null,
     });
 
     res.status(200).json({
@@ -134,6 +161,17 @@ export default async function handler(
       first_visit_date: firstVisitDate,
     });
   } catch (err) {
+    // Postgres unique_violation = SQLSTATE 23505. Drizzle surfaces this in
+    // err.code or err.constraint depending on driver version; postgres-js
+    // attaches it on err.code as '23505'.
+    const code = (err as { code?: string } | undefined)?.code;
+    if (code === '23505') {
+      res.status(409).json({
+        status: 'already_subscribed',
+        message: 'This email is already on our system. Request a manage link instead.',
+      });
+      return;
+    }
     console.error('[book] failed', err);
     const message = err instanceof Error ? err.message : 'unknown_error';
     res.status(500).json({ status: 'error', message });

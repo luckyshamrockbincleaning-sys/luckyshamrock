@@ -4,6 +4,7 @@ import { mockReq, mockRes } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
 import { customer, subscription, visit } from '../../db/schema.js';
+import { magicLinkToken, notificationLog } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 beforeAll(() => {
@@ -85,5 +86,26 @@ describe('POST /api/book — happy path', () => {
     const res = mockRes<typeof handler>();
     await handler(req, res);
     expect(res.statusCode).toBe(405);
+  });
+
+  it('issues a magic_link_token and writes notification_log rows on success', async () => {
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: { ...validBody, plan: 'monthly' },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+    expect(res.statusCode).toBe(200);
+
+    const db = getDb();
+    const tokens = await db.select().from(magicLinkToken);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]!.consumedAt).toBeNull();
+
+    const logs = await db.select().from(notificationLog);
+    expect(logs.length).toBeGreaterThanOrEqual(2);
+    const kinds = new Set(logs.map((l) => l.kind));
+    expect(kinds.has('booking_confirmed')).toBe(true);
+    expect(kinds.has('magic_link')).toBe(true);
   });
 });
