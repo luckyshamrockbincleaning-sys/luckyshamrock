@@ -66,6 +66,28 @@ method) return a separate `{error: '<reason>'}` shape — those aren't health
 or business-state assertions and don't carry `time`. See `api/health.ts`
 for the reference implementation.
 
+## Booking endpoint conventions
+
+`/api/book` and similar mutation endpoints follow this response contract:
+
+| Status | Body shape | Meaning |
+|---|---|---|
+| 200 | `{status: 'ok', ...payload}` | success |
+| 400 | `{status: 'invalid', errors: Record<string, string[]>}` | zod validation failed |
+| 409 | `{status: '<reason>', message}` | request conflicts with current state (e.g., `already_subscribed`) |
+| 422 | `{status: '<reason>', message}` | request is well-formed but business-invalid (e.g., `out_of_area`) |
+| 500 | `{status: 'error', message}` | unexpected server failure; logged with the endpoint's `[name]` tag |
+
+Pure-validation tests (mocked DB) live in `api/_tests/<endpoint>.failure.test.ts`. Integration tests (real Neon) live in `api/_tests/<endpoint>.test.ts` and must call `truncateAllForTests()` in a `beforeEach` to keep rows from leaking between cases.
+
+App-side UUIDs via `crypto.randomUUID()` everywhere. Do not introduce `gen_random_uuid()` or `pgcrypto` without a strong reason.
+
+The stubbed `lib/email.ts` will be replaced in Phase 2 with a real Gmail send. The `sendEmail()` signature and `SendEmailResult` shape are stable — don't change them when wiring the real impl.
+
+**Test parallelism note:** `vitest.config.ts` sets `poolOptions.forks.singleFork = true` to serialize test files. Integration tests TRUNCATE the shared Neon DB; parallel files race on that. Don't undo this without solving the race a different way (per-file schemas, transactions, etc.).
+
+**Phase 1+ open follow-up — wrap `/api/book` writes in a transaction.** Currently the customer + subscription + visit INSERTs are sequential. If subscription INSERT fails after customer INSERT, you leave an orphan customer. Real risk is small (retry path mostly heals it) but worth fixing once `db.transaction(...)` is needed for a Phase 2-3 endpoint anyway.
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.
