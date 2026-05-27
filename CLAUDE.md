@@ -82,11 +82,21 @@ Pure-validation tests (mocked DB) live in `api/_tests/<endpoint>.failure.test.ts
 
 App-side UUIDs via `crypto.randomUUID()` everywhere. Do not introduce `gen_random_uuid()` or `pgcrypto` without a strong reason.
 
-The stubbed `lib/email.ts` will be replaced in Phase 2 with a real Gmail send. The `sendEmail()` signature and `SendEmailResult` shape are stable — don't change them when wiring the real impl.
-
 **Test parallelism note:** `vitest.config.ts` sets `poolOptions.forks.singleFork = true` to serialize test files. Integration tests TRUNCATE the shared Neon DB; parallel files race on that. Don't undo this without solving the race a different way (per-file schemas, transactions, etc.).
 
-**Phase 1+ open follow-up — wrap `/api/book` writes in a transaction.** Currently the customer + subscription + visit INSERTs are sequential. If subscription INSERT fails after customer INSERT, you leave an orphan customer. Real risk is small (retry path mostly heals it) but worth fixing once `db.transaction(...)` is needed for a Phase 2-3 endpoint anyway.
+**Open follow-up — wrap `/api/book` writes in a transaction.** Currently the customer + subscription + visit + magic_link_token INSERTs are sequential. If one fails midway, you leave orphan rows. Real risk is small (retry path mostly heals it) but worth fixing once `db.transaction(...)` is needed for a Phase 3 mutation endpoint anyway.
+
+## Auth + email conventions (Phase 2+)
+
+- **Session cookies** are HS256 JWTs signed with `SESSION_SECRET`. Use `signSessionCookie` / `verifySessionCookie` from `lib/cookies.ts`. Cookie name: `ls_session`. 30-day absolute TTL. HTTP-only, Secure, SameSite=Lax. Sliding renewal lives in Phase 3.
+- **Magic-link tokens** are 32 random bytes URL-safe base64. Always email the plaintext; store the SHA-256 hash via `hashToken()` from `lib/tokens.ts`. 15-min TTL, single-use (`consumed_at`).
+- **Sending email** goes through `sendAndLog` (`lib/notifications.ts`), which wraps `sendEmail` and writes to `notification_log`. For visit-bound emails (`visitId !== null`) the wrapper short-circuits if a prior row exists with the same `(visit_id, kind)` — DB-enforced idempotency. Magic-link rows have `visitId: null` and are always sent.
+- **Templates** live in `lib/email/templates.ts` as pure `(props) => {subject, html, text}` functions. Add a new template by exporting another function; don't pull in a template engine.
+- **Gmail API client** is `lib/gmail.ts`. Sends via service-account JWT → OAuth → REST POST to `gmail.googleapis.com`. Falls back to a console-log stub (`[email:stub]` tag) when `GMAIL_SERVICE_ACCOUNT_JSON` is unset — that's the local dev / test path.
+- **Env vars (Phase 2):** `SITE_URL`, `SESSION_SECRET`, `GMAIL_SERVICE_ACCOUNT_JSON`, `GMAIL_SEND_AS`. See `.env.example`.
+- **Customer-enumeration safety:** endpoints that take an email and look it up (e.g., `POST /api/magic-link/send`) MUST always return 200/ok regardless of whether the email exists. Differentiating leaks the customer list to an attacker.
+- **Cookie `Secure` flag is hard-coded** in `formatSessionCookieHeader`. This means the cookie is silently dropped over plain HTTP — fine for production (HTTPS) and `vercel dev` proxy, but if you ever test against `http://localhost` directly the session cookie won't stick. Don't downgrade — fix the URL instead.
+- **Workspace setup** for production Gmail send is documented in `docs/superpowers/plans/2026-05-27-phase-2-email-magiclink.md` Task 1. If a future session sees Gmail failing, start there.
 
 ## Active work
 
