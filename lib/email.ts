@@ -1,11 +1,10 @@
 /**
- * Email sender. STUBBED for Phase 1: writes the would-be email to console
- * and returns a synthetic gmail_message_id. Phase 2 swaps the body of
- * sendEmail() for a real Gmail API call without changing the signature.
- *
- * Callers should also write a notification_log row themselves; this module
- * only handles the send side and reports whether it succeeded.
+ * Email sender entrypoint. Delegates to lib/gmail.ts (real OAuth + Gmail
+ * REST when GMAIL_SERVICE_ACCOUNT_JSON is set, otherwise a console-log
+ * stub). Signature and result shape are stable across Phase 1 and Phase 2.
  */
+
+import { sendViaGmail, type SendGmailResult } from './gmail.js';
 
 export type EmailKind =
   | 'magic_link'
@@ -18,7 +17,10 @@ export interface SendEmailInput {
   kind: EmailKind;
   to: string;
   subject: string;
+  /** Plain-text body. */
   body: string;
+  /** Optional HTML body. If absent, body is wrapped in <pre>. */
+  html?: string;
 }
 
 export interface SendEmailResult {
@@ -27,19 +29,17 @@ export interface SendEmailResult {
   error?: string;
 }
 
-const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const { kind, to, subject, body } = input;
+  const html = input.html ?? `<pre>${escapeHtml(input.body)}</pre>`;
+  const result: SendGmailResult = await sendViaGmail({
+    to: input.to,
+    subject: input.subject,
+    text: input.body,
+    html,
+  });
+  return result;
+}
 
-  if (!SIMPLE_EMAIL_RE.test(to)) {
-    return { ok: false, error: `invalid recipient: ${to}` };
-  }
-
-  console.log('[email:stub]', { kind, to, subject, bodyPreview: body.slice(0, 80) });
-
-  return {
-    ok: true,
-    gmailMessageId: `stub-${crypto.randomUUID()}`,
-  };
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

@@ -34,7 +34,6 @@ describe('sendEmail (stubbed for Phase 1)', () => {
     const [tag, payload] = logSpy.mock.calls[0]!;
     expect(tag).toBe('[email:stub]');
     expect(payload).toMatchObject({
-      kind: 'magic_link',
       to: 'sam@example.com',
       subject: 'Manage your booking',
     });

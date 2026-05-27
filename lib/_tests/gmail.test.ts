@@ -53,9 +53,18 @@ describe('sendViaGmail — stub branch (no GMAIL_SERVICE_ACCOUNT_JSON)', () => {
 });
 
 describe('sendViaGmail — real branch entry conditions', () => {
+  const prevJson = process.env.GMAIL_SERVICE_ACCOUNT_JSON;
+  const prevSendAs = process.env.GMAIL_SEND_AS;
+
   beforeEach(() => {
     process.env.GMAIL_SERVICE_ACCOUNT_JSON = '{"client_email":"x@y.iam","private_key":"-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----"}';
     process.env.GMAIL_SEND_AS = 'hello@luckyshamrock.ca';
+  });
+  afterEach(() => {
+    if (prevJson === undefined) delete process.env.GMAIL_SERVICE_ACCOUNT_JSON;
+    else process.env.GMAIL_SERVICE_ACCOUNT_JSON = prevJson;
+    if (prevSendAs === undefined) delete process.env.GMAIL_SEND_AS;
+    else process.env.GMAIL_SEND_AS = prevSendAs;
   });
 
   it('errors clearly when GMAIL_SEND_AS is missing', async () => {
