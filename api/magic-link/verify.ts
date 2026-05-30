@@ -35,11 +35,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    // Mark consumed
-    await db.update(magicLinkToken).set({ consumedAt: new Date() }).where(eq(magicLinkToken.token, tokenHash));
-
-    // Issue session cookie and redirect
+    // Sign the cookie BEFORE marking the token consumed — if signing throws
+    // (missing secret, jose hiccup) we don't want to burn a valid link.
     const sessionToken = await signSessionCookie(row.customerId);
+    await db.update(magicLinkToken).set({ consumedAt: new Date() }).where(eq(magicLinkToken.token, tokenHash));
     res.setHeader('Set-Cookie', formatSessionCookieHeader(sessionToken));
     res.redirect('/manage');
   } catch (err) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import handler from '../magic-link/verify.js';
 import { mockReq } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
@@ -6,6 +6,7 @@ import { getDb } from '../../db/client.js';
 import { customer, magicLinkToken } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { hashToken } from '../../lib/tokens.js';
+import * as cookies from '../../lib/cookies.js';
 import { verifySessionCookie, SESSION_COOKIE_NAME } from '../../lib/cookies.js';
 
 beforeAll(() => {
@@ -119,6 +120,21 @@ describe('GET /api/magic-link/verify', () => {
     const res = mockResWithHeaders();
     await handler(req, res);
     expect(res.statusCode).toBe(400);
+  });
+
+  it('leaves consumed_at null when cookie signing fails', async () => {
+    await makeCustomerAndToken('sam@example.com', 'unlucky-token');
+    const spy = vi.spyOn(cookies, 'signSessionCookie').mockRejectedValueOnce(new Error('boom'));
+
+    const req = mockReq<typeof handler>({ method: 'GET', query: { token: 'unlucky-token' } });
+    const res = mockResWithHeaders();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(500);
+    const db = getDb();
+    const [t] = await db.select().from(magicLinkToken);
+    expect(t!.consumedAt).toBeNull();
+    spy.mockRestore();
   });
 
   it('returns 405 for non-GET', async () => {
