@@ -103,6 +103,10 @@ export const visit = pgTable(
     subscriptionId: uuid('subscription_id').references(() => subscription.id, {
       onDelete: 'set null',
     }),
+    // Bin count for one-off visits, which have no subscription to derive it from.
+    // Recurring visits leave this null and read bin_count off their subscription
+    // (single source of truth per visit type). The operator view COALESCEs the two.
+    binCount: integer('bin_count'),
     scheduledFor: date('scheduled_for', { mode: 'date' }).notNull(),
     status: visitStatusEnum('status').notNull().default('scheduled'),
     headingThereAt: timestamp('heading_there_at', { withTimezone: true }),

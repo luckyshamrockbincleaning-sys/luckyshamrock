@@ -95,6 +95,9 @@ export default async function handler(
       id: crypto.randomUUID(),
       customerId,
       subscriptionId,
+      // One-offs have no subscription, so store bin count on the visit itself.
+      // Recurring visits leave it null and derive from the subscription.
+      binCount: data.plan === 'oneoff' ? data.bin_count : null,
       scheduledFor,
     }));
     const firstVisitId = visitRows[0]?.id ?? null;

@@ -1,0 +1,1 @@
+ALTER TABLE "visit" ADD COLUMN "bin_count" integer;

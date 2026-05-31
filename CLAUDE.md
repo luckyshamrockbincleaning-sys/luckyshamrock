@@ -125,8 +125,10 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   → 401 `{status:'unauthorized'}`. One shared password; no per-user identity.
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
-- **`bin_count` comes from the subscription** (LEFT JOIN) — `null` for one-off
-  visits (book.ts never stores bin_count for one-offs; known follow-up).
+- **`bin_count` per visit type:** recurring visits derive it from the
+  subscription (LEFT JOIN, `visit.bin_count` null); one-off visits store it on
+  `visit.bin_count` (no subscription to derive from). The operator view selects
+  `COALESCE(visit.bin_count, subscription.bin_count)` so both render correctly.
 - **Operator skip ≠ customer skip:** operator skip just marks the visit `skipped`
   (no replacement). Customer skip (`/api/visit/:id/skip`) inserts a replacement.
 - **notify/done are double-tap-safe** for free via `sendAndLog`'s `(visit_id, kind)`

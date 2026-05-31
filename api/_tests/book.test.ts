@@ -56,6 +56,9 @@ describe('POST /api/book — happy path', () => {
 
     const visits = await db.select().from(visit).where(eq(visit.customerId, c!.id));
     expect(visits).toHaveLength(12);
+    // Recurring visits derive bin_count from the subscription, so the per-visit
+    // column stays null (single source of truth per visit type).
+    expect(visits.every((v) => v.binCount === null)).toBe(true);
   });
 
   it('creates a one-off visit with no subscription', async () => {
@@ -79,6 +82,8 @@ describe('POST /api/book — happy path', () => {
     expect(visits).toHaveLength(1);
     expect(visits[0]!.subscriptionId).toBeNull();
     expect(visits[0]!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-07-15');
+    // One-off visits have no subscription, so bin_count is stored on the visit.
+    expect(visits[0]!.binCount).toBe(2);
   });
 
   it('returns 405 for non-POST', async () => {

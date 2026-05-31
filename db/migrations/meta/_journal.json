@@ -15,6 +15,13 @@
       "when": 1779824201465,
       "tag": "0001_lonely_stick",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780269960809,
+      "tag": "0002_cooing_echo",
+      "breakpoints": true
     }
   ]
 }

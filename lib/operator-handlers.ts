@@ -9,7 +9,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, ne, gt, gte, lte, asc } from 'drizzle-orm';
+import { and, eq, ne, gt, gte, lte, asc, sql } from 'drizzle-orm';
 import { addDays } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
@@ -41,7 +41,9 @@ const stopColumns = {
   street: customer.street,
   city: customer.city,
   postalCode: customer.postalCode,
-  binCount: subscription.binCount,
+  // One-offs store bin_count on the visit; recurring derive it from the
+  // subscription. COALESCE picks whichever is present.
+  binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────

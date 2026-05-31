@@ -37,6 +37,7 @@ async function seedVisit(opts: {
   status?: string;
   withSub?: boolean;
   binCount?: number;
+  visitBinCount?: number;
   name?: string;
 }): Promise<string> {
   const db = getDb();
@@ -66,6 +67,7 @@ async function seedVisit(opts: {
     id: visitId,
     customerId,
     subscriptionId: subId,
+    binCount: opts.visitBinCount ?? null,
     scheduledFor: new Date(`${opts.date}T12:00:00Z`),
     status: (opts.status as any) ?? 'scheduled',
   });
@@ -81,7 +83,8 @@ describe('GET /api/operator/today', () => {
 
   it("lists the day's visits joined to customer + subscription bin_count, excluding cancelled", async () => {
     await seedVisit({ date: '2026-06-10', withSub: true, binCount: 3, name: 'Alice' });
-    await seedVisit({ date: '2026-06-10', withSub: false, name: 'Bob' }); // one-off → bin_count null
+    // One-off with its bin count stored on the visit row (no subscription).
+    await seedVisit({ date: '2026-06-10', withSub: false, visitBinCount: 1, name: 'Bob' });
     await seedVisit({ date: '2026-06-10', status: 'cancelled', name: 'Cara' });
     await seedVisit({ date: '2026-06-11', name: 'Dave' }); // other day
 
@@ -96,9 +99,11 @@ describe('GET /api/operator/today', () => {
     const byName: Record<string, any> = Object.fromEntries(
       res.body.visits.map((v: any) => [v.customer_name, v]),
     );
+    // Recurring stop derives bin_count from the subscription...
     expect(byName.Alice.bin_count).toBe(3);
     expect(byName.Alice.scheduled_for).toBe('2026-06-10');
-    expect(byName.Bob.bin_count).toBeNull();
+    // ...one-off stop reads it off the visit (COALESCE picks visit.bin_count).
+    expect(byName.Bob.bin_count).toBe(1);
     expect(byName.Cara).toBeUndefined();
     expect(byName.Dave).toBeUndefined();
   });
