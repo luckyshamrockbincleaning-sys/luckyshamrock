@@ -114,6 +114,29 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
 - **Cookie `Secure` flag is hard-coded** in `formatSessionCookieHeader`. This means the cookie is silently dropped over plain HTTP — fine for production (HTTPS) and `vercel dev` proxy, but if you ever test against `http://localhost` directly the session cookie won't stick. Don't downgrade — fix the URL instead.
 - **Workspace setup** for production Gmail send is documented in `docs/superpowers/plans/2026-05-27-phase-2-email-magiclink.md` Task 1. If a future session sees Gmail failing, start there.
 
+## Operator auth conventions (Phase 4)
+
+- **Separate session from customers.** Operator auth is its own `ls_operator`
+  HS256 JWT (payload `{ op: true }`) signed with `OPERATOR_SECRET`, helpers in
+  `lib/operator.ts`. Never reuse `ls_session`/`SESSION_SECRET` for operator gating
+  — `getSessionCustomerId` and `getOperatorSession` are deliberately distinct.
+- **Login** is `POST /api/operator/login` with `{password}`, checked **timing-safe**
+  against `OPERATOR_PASSWORD`. Operator endpoints gate on `getOperatorSession(req)`
+  → 401 `{status:'unauthorized'}`. One shared password; no per-user identity.
+- **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
+  Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
+- **`bin_count` comes from the subscription** (LEFT JOIN) — `null` for one-off
+  visits (book.ts never stores bin_count for one-offs; known follow-up).
+- **Operator skip ≠ customer skip:** operator skip just marks the visit `skipped`
+  (no replacement). Customer skip (`/api/visit/:id/skip`) inserts a replacement.
+- **notify/done are double-tap-safe** for free via `sendAndLog`'s `(visit_id, kind)`
+  idempotency — a second tap returns `{skipped:true}` and sends no second email.
+- **New env vars:** `OPERATOR_SECRET` (`openssl rand -hex 32`), `OPERATOR_PASSWORD`.
+  `/ops` shows the password gate without them, but login + the API 500/401 until
+  both are set in Vercel.
+- **`/ops` page** is filesystem-routed like `/manage` (no `vercel.json`): the
+  `ops/` dir (`index.html` + `app-ops.jsx` + `components-ops.jsx` + `ops.css`).
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.

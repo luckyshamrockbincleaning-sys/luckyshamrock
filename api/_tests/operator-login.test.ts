@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import handler from '../operator/login.js';
+import { handleLogin as handler } from '../../lib/operator-handlers.js';
 import { verifyOperatorCookie, OPERATOR_COOKIE_NAME } from '../../lib/operator.js';
 
 beforeAll(() => {

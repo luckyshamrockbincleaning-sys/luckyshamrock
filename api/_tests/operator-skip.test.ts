@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import handler from '../operator/visit/[id]/skip.js';
+import { handleSkip as handler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
 import { customer, visit } from '../../db/schema.js';

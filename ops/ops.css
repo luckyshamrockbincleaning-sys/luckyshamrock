@@ -1,0 +1,200 @@
+/* Ops page — operator's phone view. Leans on the brand variables in
+   /styles.css. Single column, mobile-portrait, big tap targets. */
+
+.ops-body {
+  margin: 0;
+  background: var(--cream);
+  color: var(--green-darker);
+  font-family: 'Figtree', system-ui, sans-serif;
+}
+
+.ops-shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 20px 16px 96px;
+}
+
+.ops-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.ops-header h1 {
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 900;
+  font-size: 26px;
+  margin: 0;
+  color: var(--green-deep);
+}
+
+.ops-header .brand {
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--green);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+/* Today / Upcoming toggle */
+.ops-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.ops-toggle button {
+  flex: 1;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--paper);
+  color: var(--green-deep);
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 12px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.ops-toggle button.active {
+  background: var(--green);
+  color: var(--white);
+  border-color: var(--green);
+}
+
+.ops-card {
+  background: var(--paper);
+  border-radius: 16px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.ops-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ops-date {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--brown-warm);
+  margin-bottom: 2px;
+}
+.ops-name {
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--green-deep);
+}
+.ops-addr {
+  font-size: 14px;
+  color: #555;
+  margin-top: 2px;
+}
+
+.ops-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ops-phone {
+  color: var(--green);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.ops-notes {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--cream-2, #f3efe6);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--brown, #5a4632);
+  white-space: pre-wrap;
+}
+
+.ops-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Buttons (self-contained so this page doesn't depend on manage.css). */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: transform 0.05s ease, opacity 0.1s ease;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:active:not(:disabled) { transform: scale(0.98); }
+
+/* Big tap targets for the route */
+.ops-btn { flex: 1 1 40%; min-height: 48px; font-size: 16px; }
+
+.btn-primary { background: var(--green); color: var(--white); }
+.btn-go { background: var(--green-deep); color: var(--white); }
+.btn-skip { background: var(--brown-soft, #e7dccb); color: var(--brown, #5a4632); }
+.btn-ghost { background: transparent; color: var(--green-deep); border: 1px solid rgba(0, 0, 0, 0.12); }
+
+.visit-status {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  height: fit-content;
+}
+.visit-status.scheduled { background: var(--green-soft, #dfece1); color: var(--green-deep); }
+.visit-status.heading_there { background: #FCEFC7; color: #7A5B00; }
+.visit-status.done { background: #E8E8E8; color: #555; }
+.visit-status.skipped { background: var(--cream-2, #f3efe6); color: var(--brown, #5a4632); }
+.visit-status.cancelled { background: #F5DADA; color: #7A2222; }
+
+.login-card { text-align: center; padding: 28px 22px; }
+.login-card h2 {
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  margin: 0 0 6px;
+  color: var(--green-deep);
+}
+.login-card p { color: #555; margin: 0 0 18px; }
+.login-card input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--white);
+}
+
+.flash {
+  padding: 10px 14px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.flash.ok { background: var(--green-soft, #dfece1); color: var(--green-deep); }
+.flash.err { background: #F5DADA; color: #7A2222; }
+
+.muted { color: #6b6b6b; font-size: 14px; }
