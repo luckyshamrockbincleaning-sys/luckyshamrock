@@ -84,6 +84,22 @@ App-side UUIDs via `crypto.randomUUID()` everywhere. Do not introduce `gen_rando
 
 **Test parallelism note:** `vitest.config.ts` sets `poolOptions.forks.singleFork = true` to serialize test files. Integration tests TRUNCATE the shared Neon DB; parallel files race on that. Don't undo this without solving the race a different way (per-file schemas, transactions, etc.).
 
+**Test database isolation (load-bearing):** `npm test` runs against a **separate Neon database** (`neondb_test`), not the production `neondb`. The plumbing:
+
+- `.env.local` holds both `DATABASE_URL` (prod) and `TEST_DATABASE_URL` (test). `.env.example` documents both.
+- `vitest.config.ts` declares `globalSetup: ['./db/test-setup.ts']`. That setup script:
+  1. Refuses to start if `TEST_DATABASE_URL` is missing or equal to `DATABASE_URL`.
+  2. Swaps `process.env.DATABASE_URL` → `TEST_DATABASE_URL` for the duration of the run.
+  3. Sets a `LUCKYSHAMROCK_TEST_RUN=1` marker.
+- `truncateAllForTests()` in `db/client.ts` refuses to fire without that marker AND requires `DATABASE_URL === TEST_DATABASE_URL` at call time (defense in depth).
+
+Without all of the above, `npm test` against `.env.local` will throw before any TRUNCATE runs. Provision the test DB once via:
+```bash
+psql "$DATABASE_URL_UNPOOLED" -c 'CREATE DATABASE neondb_test'
+DATABASE_URL=<test-url> DATABASE_URL_UNPOOLED=<test-url-unpooled> npx drizzle-kit push --force
+```
+Schema drift requires re-running `drizzle-kit push --force` against the test URL. Don't add real customer-like data to `neondb_test` — it gets truncated every test case.
+
 **Open follow-up — wrap `/api/book` writes in a transaction.** Currently the customer + subscription + visit + magic_link_token INSERTs are sequential. If one fails midway, you leave orphan rows. Real risk is small (retry path mostly heals it) but worth fixing once `db.transaction(...)` is needed for a Phase 3 mutation endpoint anyway.
 
 ## Auth + email conventions (Phase 2+)
