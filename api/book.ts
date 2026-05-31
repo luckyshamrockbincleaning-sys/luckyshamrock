@@ -47,15 +47,14 @@ export default async function handler(
   const db = getDb();
 
   try {
-    // Look up existing customer by email
+    // Look up existing customer by email (read — outside the write transaction).
     const [existing] = await db
       .select()
       .from(customer)
       .where(eq(customer.email, data.email));
 
-    let customerId: string;
     if (existing) {
-      // Check for active subscription
+      // A customer with an active subscription can't re-book a plan.
       const [activeSub] = await db
         .select()
         .from(subscription)
@@ -67,42 +66,28 @@ export default async function handler(
         });
         return;
       }
-      customerId = existing.id;
-    } else {
-      customerId = crypto.randomUUID();
-      await db.insert(customer).values({
-        id: customerId,
-        email: data.email,
-        name: data.name,
-        phone: data.phone ?? null,
-        street: data.street,
-        city: data.city,
-        postalCode: normalizePostalCode(data.postal_code),
-        pickupDay: data.pickup_day,
-      });
     }
 
-    // Generate visits
-    let visitDates: Date[];
+    const isNewCustomer = !existing;
+    const customerId = existing?.id ?? crypto.randomUUID();
+
+    // Prepare the rows (pure — no I/O yet). The inserts run inside the
+    // transaction below so a mid-flight failure can't leave orphan rows.
+    const startDate = new Date();
     let subscriptionId: string | null = null;
+    let cadence: Cadence | null = null;
+    let visitDates: Date[];
 
     if (data.plan === 'oneoff') {
       visitDates = [new Date(`${data.oneoff_date!}T12:00:00Z`)];
     } else {
       subscriptionId = crypto.randomUUID();
-      const startDate = new Date();
-      await db.insert(subscription).values({
-        id: subscriptionId,
-        customerId,
-        cadence: data.plan,
-        binCount: data.bin_count,
-        startedOn: startDate,
-      });
+      cadence = data.plan;
       visitDates = generateVisitDates({
         startDate,
         pickupDay: data.pickup_day,
-        cadence: data.plan,
-        count: RECURRING_COUNT[data.plan],
+        cadence,
+        count: RECURRING_COUNT[cadence],
       });
     }
 
@@ -112,19 +97,46 @@ export default async function handler(
       subscriptionId,
       scheduledFor,
     }));
-    await db.insert(visit).values(visitRows);
     const firstVisitId = visitRows[0]?.id ?? null;
+    const tokenPlain = generateMagicLinkToken();
+
+    // All booking writes in one transaction: customer (if new) + subscription
+    // (if recurring) + visits + magic-link token. If any insert fails, the whole
+    // booking rolls back — no orphan customer/subscription/visit rows. Email
+    // sends stay OUTSIDE: a failed send must not undo a saved booking, and
+    // network I/O should never hold a DB transaction open.
+    await db.transaction(async (tx) => {
+      if (isNewCustomer) {
+        await tx.insert(customer).values({
+          id: customerId,
+          email: data.email,
+          name: data.name,
+          phone: data.phone ?? null,
+          street: data.street,
+          city: data.city,
+          postalCode: normalizePostalCode(data.postal_code),
+          pickupDay: data.pickup_day,
+        });
+      }
+      if (subscriptionId) {
+        await tx.insert(subscription).values({
+          id: subscriptionId,
+          customerId,
+          cadence: cadence!,
+          binCount: data.bin_count,
+          startedOn: startDate,
+        });
+      }
+      await tx.insert(visit).values(visitRows);
+      await tx.insert(magicLinkToken).values({
+        token: hashToken(tokenPlain),
+        customerId,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      });
+    });
 
     const firstVisitDate = visitDates[0]!.toISOString().slice(0, 10);
     const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
-
-    // Issue a fresh magic-link token
-    const tokenPlain = generateMagicLinkToken();
-    await db.insert(magicLinkToken).values({
-      token: hashToken(tokenPlain),
-      customerId,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    });
     const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(tokenPlain)}`;
 
     // Send booking_confirmed — idempotent on (firstVisitId, 'booking_confirmed')

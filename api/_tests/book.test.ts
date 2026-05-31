@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import handler from '../book.js';
 import { mockReq, mockRes } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
@@ -107,5 +107,43 @@ describe('POST /api/book — happy path', () => {
     const kinds = new Set(logs.map((l) => l.kind));
     expect(kinds.has('booking_confirmed')).toBe(true);
     expect(kinds.has('magic_link')).toBe(true);
+  });
+});
+
+describe('POST /api/book — atomicity', () => {
+  // This test deliberately drives the handler into its 500 path, which logs via
+  // console.error. Suppress it so the expected error doesn't look like a failure.
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+  });
+
+  it('rolls back the new customer row when a later write fails mid-transaction', async () => {
+    // '2026-13-45' passes the zod YYYY-MM-DD regex but is not a real calendar
+    // date, so `new Date(...)` is Invalid and the visit insert throws *after*
+    // the customer insert. Without wrapping the writes in a transaction the
+    // customer row orphans; with one, the whole booking rolls back. (If a future
+    // change validates oneoff_date as a real date, swap this for another
+    // mid-transaction failure vector — the point is rollback, not the date.)
+    const email = 'atomic-rollback@example.com';
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: { ...validBody, email, plan: 'oneoff', oneoff_date: '2026-13-45' },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(500);
+
+    const db = getDb();
+    const rows = await db.select().from(customer).where(eq(customer.email, email));
+    expect(rows).toHaveLength(0);
+
+    // postgres-js echoes the rolled-back serialization error on a later tick;
+    // let it flush while the console.error spy is still installed.
+    await new Promise((r) => setTimeout(r, 20));
   });
 });
