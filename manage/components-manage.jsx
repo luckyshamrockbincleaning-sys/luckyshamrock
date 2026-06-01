@@ -180,9 +180,11 @@ function VisitsCard({ visits, onSkip, busyVisitId }) {
             <div className="visit-date">{formatDate(v.scheduled_for)}</div>
             <div className="muted" style={{marginTop: 2}}><span className={`visit-status ${v.status}`}>{v.status}</span></div>
           </div>
-          {v.status === 'scheduled' && v.subscription_id && (
-            <button className="btn btn-skip" disabled={busyVisitId === v.id} onClick={() => onSkip(v.id)}>
-              {busyVisitId === v.id ? 'Skipping…' : 'Skip this one'}
+          {v.status === 'scheduled' && (
+            <button className="btn btn-skip" disabled={busyVisitId === v.id} onClick={() => onSkip(v.id, !v.subscription_id)}>
+              {busyVisitId === v.id
+                ? (v.subscription_id ? 'Skipping…' : 'Cancelling…')
+                : (v.subscription_id ? 'Skip this one' : 'Cancel this visit')}
             </button>
           )}
         </div>
@@ -224,15 +226,19 @@ function ManageApp() {
     return json;
   }
 
-  async function onSkip(visitId) {
+  async function onSkip(visitId, isOneoff) {
+    if (isOneoff && !confirm('Cancel this visit? This one-off booking will be removed.')) return;
     setBusyVisitId(visitId);
     setFlash({ kind: '', text: '' });
     try {
       const out = await postJson(`/api/visit/${visitId}/skip`);
-      setFlash({ kind: 'ok', text: `Skipped. New visit on ${formatDate(out.replacement_date)}.` });
+      setFlash({
+        kind: 'ok',
+        text: out.cancelled ? 'Visit cancelled.' : `Skipped. New visit on ${formatDate(out.replacement_date)}.`,
+      });
       await load();
     } catch (e) {
-      setFlash({ kind: 'err', text: `Could not skip: ${e.message}` });
+      setFlash({ kind: 'err', text: `Could not ${isOneoff ? 'cancel' : 'skip'}: ${e.message}` });
     } finally {
       setBusyVisitId(null);
     }

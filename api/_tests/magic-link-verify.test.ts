@@ -102,15 +102,31 @@ describe('GET /api/magic-link/verify', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 400 when token is already consumed', async () => {
-    await makeCustomerAndToken('sam@example.com', 'used-token');
+  it('still works when the token was already used (reusable within TTL)', async () => {
+    // Links must survive a second click AND email-scanner prefetch (which
+    // consumes the token before the human clicks). So a previously-used but
+    // unexpired token still logs the customer in.
+    const customerId = await makeCustomerAndToken('sam@example.com', 'used-token');
     const db = getDb();
-    await db.update(magicLinkToken).set({ consumedAt: new Date() }).where(eq(magicLinkToken.token, hashToken('used-token')));
+    const firstUse = new Date(Date.now() - 60_000);
+    await db.update(magicLinkToken).set({ consumedAt: firstUse }).where(eq(magicLinkToken.token, hashToken('used-token')));
 
     const req = mockReq<typeof handler>({ method: 'GET', query: { token: 'used-token' } });
     const res = mockResWithHeaders();
     await handler(req, res);
-    expect(res.statusCode).toBe(400);
+
+    expect(res.statusCode).toBeGreaterThanOrEqual(300);
+    expect(res.statusCode).toBeLessThan(400);
+    expect(res.redirected).toBe('/manage');
+    const cookieHeader = res.headers['Set-Cookie'];
+    expect(cookieHeader).toBeDefined();
+    const cookieStr = Array.isArray(cookieHeader) ? cookieHeader[0]! : cookieHeader as string;
+    const jwt = cookieStr.split(';')[0]!.split('=')[1]!;
+    expect((await verifySessionCookie(jwt))?.customerId).toBe(customerId);
+
+    // First-use timestamp is preserved (not overwritten) for audit.
+    const [t] = await db.select().from(magicLinkToken);
+    expect(t!.consumedAt!.getTime()).toBe(firstUse.getTime());
   });
 
   it('returns 400 when token has expired', async () => {

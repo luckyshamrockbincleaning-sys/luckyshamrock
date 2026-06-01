@@ -7,7 +7,7 @@ import { generateMagicLinkToken, hashToken } from '../../lib/tokens.js';
 import { sendAndLog } from '../../lib/notifications.js';
 import { magicLinkTemplate } from '../../lib/email/templates.js';
 
-const TOKEN_TTL_MS = 15 * 60 * 1000;
+const TOKEN_TTL_MS = 60 * 60 * 1000;
 
 const requestSchema = z.object({
   email: z.string().trim().toLowerCase().email(),

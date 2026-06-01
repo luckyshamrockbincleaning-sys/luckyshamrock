@@ -26,19 +26,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(400).json({ status: 'invalid', message: 'token not found' });
       return;
     }
-    if (row.consumedAt !== null) {
-      res.status(400).json({ status: 'invalid', message: 'token already used' });
-      return;
-    }
     if (row.expiresAt.getTime() <= Date.now()) {
       res.status(400).json({ status: 'invalid', message: 'token expired' });
       return;
     }
+    // NOTE: tokens are reusable within their TTL — we do NOT reject an already-
+    // consumed token. Single-use links die when an inbox link-scanner prefetches
+    // and consumes the URL before the customer clicks (a well-known magic-link
+    // footgun), and they frustrate a customer who clicks twice. Security still
+    // rests on the short expiry + the unguessable 32-byte token.
 
-    // Sign the cookie BEFORE marking the token consumed — if signing throws
-    // (missing secret, jose hiccup) we don't want to burn a valid link.
+    // Sign the cookie BEFORE touching the token — if signing throws (missing
+    // secret, jose hiccup) we don't want to record a consumption with no session.
     const sessionToken = await signSessionCookie(row.customerId);
-    await db.update(magicLinkToken).set({ consumedAt: new Date() }).where(eq(magicLinkToken.token, tokenHash));
+    // Record first use only; preserve the original timestamp for audit.
+    if (row.consumedAt === null) {
+      await db.update(magicLinkToken).set({ consumedAt: new Date() }).where(eq(magicLinkToken.token, tokenHash));
+    }
     res.setHeader('Set-Cookie', formatSessionCookieHeader(sessionToken));
     res.redirect('/manage');
   } catch (err) {

@@ -38,11 +38,11 @@ export function bookingConfirmedTemplate(p: {
 export function magicLinkTemplate(p: { manageUrl: string }): RenderedEmail {
   const subject = `Your Lucky Shamrock manage link`;
   const text =
-    `Click to manage your booking (link expires in 15 minutes):\n\n${p.manageUrl}\n\n` +
+    `Click to manage your booking (link expires in 1 hour):\n\n${p.manageUrl}\n\n` +
     `If you didn't request this, ignore this email.\n\n` +
     FOOTER_TEXT;
   const html =
-    `<p>Click to manage your booking (link expires in 15 minutes):</p>` +
+    `<p>Click to manage your booking (link expires in 1 hour):</p>` +
     `<p><a href="${escapeAttr(p.manageUrl)}">${escapeHtml(p.manageUrl)}</a></p>` +
     `<p style="color:#666">If you didn't request this, ignore this email.</p>` +
     FOOTER_HTML;

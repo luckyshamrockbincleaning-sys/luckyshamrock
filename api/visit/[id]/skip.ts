@@ -46,8 +46,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(409).json({ status: 'not_scheduled', message: `visit is ${v.status}, cannot skip` });
       return;
     }
+
+    // A one-off visit has no recurring schedule to roll forward, so "skip" means
+    // cancel it outright — there's no replacement.
     if (!v.subscriptionId) {
-      res.status(409).json({ status: 'cannot_skip_oneoff', message: 'one-off visits cannot be skipped — cancel the booking instead' });
+      await db.update(visit).set({ status: 'cancelled' }).where(eq(visit.id, visitId));
+      res.status(200).json({ status: 'ok', cancelled: true });
       return;
     }
 

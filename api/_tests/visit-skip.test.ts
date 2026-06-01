@@ -127,12 +127,17 @@ describe('POST /api/visit/:id/skip', () => {
     expect(res.body.status).toBe('not_scheduled');
   });
 
-  it('returns 409 when trying to skip a one-off visit', async () => {
+  it('cancels a one-off visit (no replacement) instead of skipping', async () => {
     const { customerId, visitId } = await setup({ withSubscription: false });
     const res = mockRes();
     await handler(await req(customerId, visitId), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.body.status).toBe('cannot_skip_oneoff');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.cancelled).toBe(true);
+
+    const db = getDb();
+    const all = await db.select().from(visit).where(eq(visit.customerId, customerId));
+    expect(all).toHaveLength(1); // no replacement inserted
+    expect(all[0]!.status).toBe('cancelled');
   });
 
   it('returns 405 for non-POST', async () => {
