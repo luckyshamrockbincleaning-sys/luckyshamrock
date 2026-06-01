@@ -16,3 +16,4 @@ build/
 # Vitest
 coverage/
 .vercel
+.booking-timepicker.png
