@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { and, eq, gte, asc, desc } from 'drizzle-orm';
+import { and, eq, gte, asc, desc, inArray } from 'drizzle-orm';
 import { addWeeks } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
@@ -88,10 +88,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
     const today2 = new Date();
     today2.setUTCHours(0, 0, 0, 0);
+    // Only surface actionable visits. Cancelled/skipped/done visits are clutter
+    // on the manage page — after a cadence change the old future visits get
+    // cancelled, and showing them made the schedule look unchanged.
     const upcoming = await db
       .select()
       .from(visit)
-      .where(and(eq(visit.customerId, customerId), gte(visit.scheduledFor, today2)))
+      .where(
+        and(
+          eq(visit.customerId, customerId),
+          gte(visit.scheduledFor, today2),
+          inArray(visit.status, ['scheduled', 'heading_there']),
+        ),
+      )
       .orderBy(asc(visit.scheduledFor));
 
     res.status(200).json({

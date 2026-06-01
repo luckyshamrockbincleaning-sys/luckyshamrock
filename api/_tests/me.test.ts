@@ -89,6 +89,24 @@ describe('GET /api/me', () => {
     expect(res.body.upcoming_visits).toHaveLength(1);
   });
 
+  it('excludes cancelled and skipped visits from upcoming_visits', async () => {
+    const customerId = await makeCustomer();
+    const db = getDb();
+    // A cadence change cancels old future visits and inserts new scheduled ones.
+    // /api/me must only surface actionable visits, not the cancelled clutter.
+    await db.insert(visit).values([
+      { id: crypto.randomUUID(), customerId, subscriptionId: null, scheduledFor: new Date('2026-12-01'), status: 'scheduled' },
+      { id: crypto.randomUUID(), customerId, subscriptionId: null, scheduledFor: new Date('2026-12-08'), status: 'cancelled' },
+      { id: crypto.randomUUID(), customerId, subscriptionId: null, scheduledFor: new Date('2026-12-15'), status: 'skipped' },
+      { id: crypto.randomUUID(), customerId, subscriptionId: null, scheduledFor: new Date('2026-12-22'), status: 'heading_there' },
+    ]);
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(customerId), res);
+    expect(res.statusCode).toBe(200);
+    const statuses = res.body.upcoming_visits.map((v: any) => v.status).sort();
+    expect(statuses).toEqual(['heading_there', 'scheduled']);
+  });
+
   it('returns the active subscription and upcoming visits for a recurring customer', async () => {
     const customerId = await makeCustomer();
     const db = getDb();

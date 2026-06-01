@@ -20,7 +20,14 @@ const PICKUP_LABEL = {
 
 function formatDate(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
+  // These are date-only values (visit.scheduled_for, subscription.started_on).
+  // They arrive either as a bare "2026-06-09" or as a UTC-midnight timestamp
+  // "2026-06-09T00:00:00.000Z" — both render as the PREVIOUS day in Mountain
+  // Time if parsed directly. Pull the calendar-day prefix and pin to local noon
+  // so the day never shifts. (The booking email shows the raw date; this keeps
+  // the manage page consistent with it.)
+  const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
+  const d = m ? new Date(`${m[1]}T12:00:00`) : new Date(iso);
   return d.toLocaleDateString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
 }
 
