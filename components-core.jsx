@@ -168,13 +168,14 @@ const Hero = ({ tweaks, onBookClick }) => (
       <div className="hero-grid">
         <div className="hero-copy">
           <h1>
-            Your bins,<br/>
+            Your garbage bins,<br/>
             <span className="accent">spotlessly clean</span><br/>
             every time.
           </h1>
           <p className="hero-sub">
-            We clean your garbage bins on collection day — sanitized, deodorized,
-            and fresh before they come back to your house.
+            Stop being mad or embarrassed at your garbage bin. We clean it on
+            collection day — sanitized, deodorized, and fresh before it comes
+            back to your house. Start smelling freshness.
           </p>
           <div className="hero-cta">
             <button className="btn btn-primary" onClick={onBookClick}>
@@ -201,8 +202,7 @@ const Hero = ({ tweaks, onBookClick }) => (
           <div className="hero-mascot-frame">
             <img src="assets/mascot-before.jpg" alt="Lucky the leprechaun reacts to a stinky bin" />
           </div>
-          <div className="float-chip before">⚠️ Before us</div>
-          <div className="float-chip sky">Booked in 90 sec</div>
+          <div className="float-chip sky">Solve a stinky garbage bin problem in 90 seconds or less</div>
         </div>
       </div>
     </div>

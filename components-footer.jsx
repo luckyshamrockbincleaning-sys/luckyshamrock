@@ -6,16 +6,16 @@ const Testimonials = () => {
   const cards = [
     {
       stars: 5,
-      quote: "Honestly, I didn't know my bin could smell like nothing. I keep going out to sniff it. My husband is worried.",
+      quote: "I didn't know my 'garbage' bin could smell so good. I keep going out to sniff it. My husband is worried.",
       name: "Saoirse M.",
       meta: "Monthly · 18 months",
       avatar: "S",
     },
     {
       stars: 5,
-      quote: "The photo they text you after is so satisfying. It's like a before/after but the after is just… a normal trash can.",
+      quote: "The photo they text you after is so satisfying. It's like a before/after but the after is just… a normal garbage bin.",
       name: "Dev P.",
-      meta: "Bi-weekly · 6 months",
+      meta: "Three Wash Season · 1 year",
       avatar: "D",
     },
     {
@@ -34,7 +34,7 @@ const Testimonials = () => {
         </div>
 
         <p className="testimonial-pullquote">
-          "I didn't know my bin <span className="accent">could smell like nothing.</span>"
+          "I didn't know my 'garbage' bin <span className="accent">could smell so good.</span>"
           <span className="attr">— Saoirse M., monthly subscriber since '24</span>
         </p>
 
@@ -66,11 +66,11 @@ const FAQ = ({ tweaks }) => {
   const faqs = [
     {
       q: "Do I need to be home?",
-      a: "Nope. Just leave the bin where we can get to it (curb, side of house, unlocked garage — your call). We'll text when we arrive and send a photo when we're done."
+      a: "Nope. Just leave the garbage bin where we can get to it (curb, side of house, unlocked garage — your call). We'll text when we arrive and send a photo when we're done."
     },
     {
       q: "Is the cleaner safe for kids and pets?",
-      a: "Yes. We use a plant-based, biodegradable deodorizer — no bleach, no harsh chemicals. The bin's safe to use immediately after we finish."
+      a: "Yes. We use a plant-based, biodegradable deodorizer — no bleach, no harsh chemicals. The garbage bin's safe to use immediately after we finish."
     },
     {
       q: "Where does the wastewater go?",
@@ -85,7 +85,7 @@ const FAQ = ({ tweaks }) => {
       a: `Of course. Pause, skip, or cancel anytime from your account — no fees, no awkward phone call. Subscriptions are month-to-month always.`
     },
     {
-      q: "What sizes of bin do you do?",
+      q: "What sizes of garbage bin do you do?",
       a: "All standard residential sizes (32, 64, and 96 gallon). Bigger commercial dumpsters — we have a separate service, just give us a call."
     },
   ];
@@ -136,10 +136,10 @@ const FooterCTA = ({ onBookClick, tweaks }) => (
     <div className="container">
       <div className="footer-pre-inner">
         <div>
-          <h2 style={{marginTop: 20}}>Stop being mad at your bin.</h2>
+          <h2 style={{marginTop: 20}}>Stop being mad or embarrassed at your garbage bin.</h2>
           <p>
             First clean is risk-free — if it doesn't smell like nothing,
-            we'll come back and re-do it. Free.
+            we'll come back and re-do it. Free. Start smelling freshness.
           </p>
           <div className="footer-pre-cta">
             <button className="btn btn-cream" onClick={onBookClick} style={{background: 'var(--toxic)', borderColor: 'var(--green-darker)', boxShadow: '0 4px 0 var(--green-darker)'}}>
@@ -174,7 +174,7 @@ const Footer = ({ tweaks }) => (
             </div>
             <span>Lucky Shamrock</span>
           </div>
-          <p>Residential bin cleaning. Family owned. Eco-safe. Annoyingly cheerful about trash.</p>
+          <p>Residential garbage bin cleaning. Locally owned. Eco-safe. Annoyingly cheerful about trash.</p>
           <div className="service-area-row">
             <span className="area-pill">Fort Saskatchewan</span>
           </div>

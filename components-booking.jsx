@@ -214,13 +214,13 @@ const Booking = ({ tweaks }) => {
       <div className="container">
         <div className="booking-grid">
           <div className="booking-info">
-            <h2>Stop smelling that.<br/>Start smelling nothing.</h2>
+            <h2>Stop smelling that.<br/>Start smelling freshness.</h2>
             <p>
               Real bookings — pick a service, pick a day, we'll be there. Cancel up to 24 hours
-              ahead with no fee. Your card isn't charged until your bin is clean.
+              ahead with no fee. Your card isn't charged until your garbage bin is clean.
             </p>
             <ul className="booking-perks">
-              <li><span className="perk-icon"><Icon.Check size={14}/></span>No need to be home — we just need bin access</li>
+              <li><span className="perk-icon"><Icon.Check size={14}/></span>No need to be home — we just need garbage bin access</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Photo proof emailed after every clean</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Eco-safe, kid-safe, pet-safe formula</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Pause or cancel anytime in your account</li>
@@ -267,7 +267,7 @@ const Booking = ({ tweaks }) => {
                 </div>
 
                 <div className="field" style={{marginTop: 22}}>
-                  <label>How many bins?</label>
+                  <label>How many garbage bins?</label>
                   <div style={{display: 'flex', gap: 8}}>
                     {[1,2,3,4].map(n => (
                       <button

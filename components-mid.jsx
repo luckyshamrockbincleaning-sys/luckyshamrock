@@ -59,11 +59,25 @@ const BeforeAfter = () => {
           </div>
           {/* Divider */}
           <div className="ba-handle" style={{left: `${pos}%`}}>
-            <div className="ba-handle-knob">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <div
+              className="ba-handle-knob"
+              style={{width: 64, height: 64, boxShadow: '0 4px 16px rgba(0,0,0,0.28)'}}
+            >
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 6 3 12 9 18"/>
                 <polyline points="15 6 21 12 15 18"/>
               </svg>
+            </div>
+            <div
+              style={{
+                position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+                marginTop: 12, whiteSpace: 'nowrap',
+                fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 13,
+                color: 'white', background: 'var(--green)', padding: '5px 14px', borderRadius: 999,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.22)', pointerEvents: 'none',
+              }}
+            >
+              ← Slide here →
             </div>
           </div>
         </div>
@@ -78,7 +92,7 @@ const HowItWorks = ({ onBookClick }) => {
     {
       icon: <Icon.Calendar size={28}/>,
       title: "Pick your day",
-      body: "Book in 90 seconds online — or text us a photo of your bin and we'll handle the rest. We come the day after pickup so your bin's empty."
+      body: "Book in 90 seconds online — or text us a photo of your garbage bin and we'll handle the rest. We come the day after pickup so your garbage bin's empty."
     },
     {
       icon: <Icon.Truck size={28}/>,
@@ -88,7 +102,7 @@ const HowItWorks = ({ onBookClick }) => {
     {
       icon: <Icon.Bubbles size={28}/>,
       title: "Sparkle delivered",
-      body: "200°F blast, plant-based deodorizer, towel-dry the rim. You get a photo when it's done. We bill the card on file."
+      body: "190°F blast, plant-based deodorizer, towel-dry the rim. You get a photo when it's done. We bill the card on file."
     }
   ];
 
@@ -98,13 +112,13 @@ const HowItWorks = ({ onBookClick }) => {
         <div style={{textAlign: 'center', maxWidth: 720, margin: '0 auto'}}>
           <h2>Three steps. Twelve minutes. Zero hassle.</h2>
           <p style={{color: 'var(--ink-2)', fontSize: 18, marginTop: 18}}>
-            We meet your bin where it lives. You keep doing whatever it was you were doing.
+            We meet your garbage bin where it lives. You keep doing whatever it was you were doing.
           </p>
         </div>
         <div className="how-steps">
           {steps.map((s, i) => (
             <div className="how-step" key={i}>
-              <div className="how-step-num">{i + 1}</div>
+              <div className="how-step-num" aria-label={`Step ${i + 1}`} style={{fontSize: 26, lineHeight: 1}}>🍀</div>
               <div className="how-step-icon">{s.icon}</div>
               <h3>{s.title}</h3>
               <p>{s.body}</p>
@@ -123,67 +137,37 @@ const HowItWorks = ({ onBookClick }) => {
 
 // ===== Pricing =====
 const Pricing = ({ tweaks, onBookClick }) => {
-  const [freq, setFreq] = useStateBA('monthly');
-
-  const plans = {
-    monthly: [
-      {
-        name: "One-Time",
-        sub: "Try us once. Smell the difference.",
-        price: 49, unit: "per bin",
-        features: ["1 bin · hot-water clean", "Eco-deodorize + towel dry", "Photo proof on completion", "No commitment"],
-      },
-      {
-        name: "Monthly",
-        sub: "The neighborhood favorite.",
-        price: 25, unit: "per bin · monthly",
-        features: ["1 bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", "10% off extra bins"],
-        featured: true,
-      },
-      {
-        name: "Quarterly",
-        sub: "For the seasonally squeamish.",
-        price: 35, unit: "per bin · quarterly",
-        features: ["1 bin · 4× per year", "Spring deep-clean included", "Trash-day timing", "Cancel anytime"],
-      }
-    ],
-    annual: [
-      {
-        name: "One-Time",
-        sub: "Try us once. Smell the difference.",
-        price: 49, unit: "per bin",
-        features: ["1 bin · hot-water clean", "Eco-deodorize + towel dry", "Photo proof on completion", "No commitment"],
-      },
-      {
-        name: "Monthly · Annual",
-        sub: "Pay yearly, save the most.",
-        price: 22, unit: "per bin · billed yearly",
-        features: ["1 bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "2 months free vs. monthly", "15% off extra bins"],
-        featured: true,
-      },
-      {
-        name: "Quarterly · Annual",
-        sub: "For the seasonally squeamish.",
-        price: 30, unit: "per bin · billed yearly",
-        features: ["1 bin · 4× per year", "Spring deep-clean included", "Trash-day timing", "$20 off vs. quarterly"],
-      }
-    ]
-  };
-
-  const current = plans[freq];
+  const current = [
+    {
+      name: "One-Time",
+      sub: "Try us once. Smell the difference.",
+      price: 45, unit: "per garbage bin",
+      features: ["1 garbage bin · hot-water clean", "Eco-deodorize + towel dry", "Photo proof on completion", "No commitment"],
+    },
+    {
+      name: "Monthly",
+      sub: "The neighborhood favorite.",
+      price: 35, unit: "per garbage bin · monthly",
+      features: ["1 garbage bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", "10% off extra bins"],
+      featured: true,
+    },
+    {
+      name: "Three Wash Season",
+      sub: "Fresh through every season.",
+      price: 105, unit: "per garbage bin · 3 washes/yr",
+      features: [
+        "Apr/May — start the season fresh",
+        "Jul/Aug — keep clean through the heat",
+        "Sept/Oct — finish the season fresh",
+        "Trash-day timing · cancel anytime",
+      ],
+    }
+  ];
 
   return (
     <section className="pricing" id="pricing">
       <div className="container" style={{textAlign: 'center'}}>
         <h2>Honest pricing. No tier called "Platinum Plus."</h2>
-        <div className="pricing-toggle">
-          <button className={freq === 'monthly' ? 'active' : ''} onClick={() => setFreq('monthly')}>
-            Pay monthly
-          </button>
-          <button className={freq === 'annual' ? 'active' : ''} onClick={() => setFreq('annual')}>
-            Pay yearly · save 10%
-          </button>
-        </div>
 
         <div className="pricing-grid" style={{textAlign: 'left'}}>
           {current.map((p, i) => (
@@ -220,6 +204,46 @@ const Pricing = ({ tweaks, onBookClick }) => {
   );
 };
 
+// ===== Why it matters (health / bacteria) =====
+const WhyClean = () => {
+  const nasties = [
+    { name: "E. coli & Salmonella", body: "Raw-meat juices and food scraps let these gut bacteria multiply in the warm, damp bottom of your garbage bin." },
+    { name: "Listeria", body: "Survives and grows even in cool weather — it thrives in the sticky residue left behind after pickup day." },
+    { name: "Mold & spores", body: "Rotting organics grow mold that puffs spores into the air every time you lift the lid." },
+    { name: "Flies & maggots", body: "Flies lay eggs in the gunk; a single missed week can hatch hundreds of maggots in a dirty garbage bin." },
+    { name: "Rodents & raccoons", body: "Lingering food smell is an open invitation — a clean garbage bin doesn't advertise dinner." },
+    { name: "That smell", body: "The stench is bacteria off-gassing. Kill the bacteria and the smell goes with it." },
+  ];
+
+  return (
+    <section className="how" id="why" style={{paddingTop: 0}}>
+      <div className="container">
+        <div style={{textAlign: 'center', maxWidth: 760, margin: '0 auto'}}>
+          <h2>What's actually living in your garbage bin.</h2>
+          <p style={{color: 'var(--ink-2)', fontSize: 18, marginTop: 18}}>
+            A garbage bin is the perfect incubator — food, warmth, and moisture. Curbside pickup
+            takes the trash, not the bacteria film coating the inside. That's what we blast away.
+          </p>
+        </div>
+        <div className="how-steps">
+          {nasties.map((n, i) => (
+            <div className="how-step" key={i}>
+              <div className="how-step-num" aria-hidden="true" style={{fontSize: 24, lineHeight: 1}}>🦠</div>
+              <h3 style={{marginTop: 8}}>{n.name}</h3>
+              <p>{n.body}</p>
+            </div>
+          ))}
+        </div>
+        <p style={{textAlign: 'center', marginTop: 30, color: 'var(--ink-3)', fontSize: 14}}>
+          Our 190°F hot-water blast plus a plant-based, kid- and pet-safe deodorizer sanitizes the
+          whole garbage bin — inside, rim, and lid.
+        </p>
+      </div>
+    </section>
+  );
+};
+
 window.BeforeAfter = BeforeAfter;
 window.HowItWorks = HowItWorks;
+window.WhyClean = WhyClean;
 window.Pricing = Pricing;
