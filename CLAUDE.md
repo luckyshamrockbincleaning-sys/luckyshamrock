@@ -40,7 +40,15 @@ BinWash side-business — but built standalone, not on the BinWash Django stack.
 - **Don't touch the static site files** (`index.html`, `app.jsx`, `components-*.jsx`,
   `styles.css`) when adding API code. They're served as-is.
 - **API files** go in `api/` and become endpoints at `/api/<filename>` (without `.ts`).
-  Nested folders work: `api/operator/login.ts` → `POST /api/operator/login`.
+  Static nested folders work: `api/operator/login.ts` → `POST /api/operator/login`.
+- **⚠️ Multi-segment DYNAMIC routes don't reach the function in this project's
+  Vercel runtime.** A catch-all `api/foo/[...path].ts` or nested
+  `api/foo/[id]/[action].ts` 404s at the *platform* for any 2+/-segment URL — the
+  function never runs. Only **single dynamic segments** are reliable
+  (`api/operator/[action].ts`, `api/visit/[id]/skip.ts` where `[id]` is the only
+  dynamic part). When you need id + sub-action, flatten to one segment and put the
+  rest in the request **body/query** (see `POST /api/operator/act` `{id, op}`).
+  Learned the hard way 2026-06-01 when `/ops` action buttons 404'd in prod.
 - **DB schema changes** require both editing `db/schema.ts` AND running
   `npm run db:push` (or generating + applying a migration). The schema file
   is the source of truth.
@@ -123,6 +131,12 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
 - **Login** is `POST /api/operator/login` with `{password}`, checked **timing-safe**
   against `OPERATOR_PASSWORD`. Operator endpoints gate on `getOperatorSession(req)`
   → 401 `{status:'unauthorized'}`. One shared password; no per-user identity.
+- **Routing is single-segment** (`api/operator/[action].ts` → `lib/operator-handlers.ts`).
+  Routes: `login`, `today`, `upcoming`, and `act`. **Visit actions go through
+  `POST /api/operator/act` with body `{id, op, text?}`** where `op` ∈
+  {notify, done, skip, note} — NOT `/api/operator/visit/:id/:action` (multi-segment,
+  404s in prod; see the API-files note above). `handleAct` validates the body and
+  delegates to the per-op handlers, which read the id from `req.query.id`.
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
 - **`bin_count` per visit type:** recurring visits derive it from the
