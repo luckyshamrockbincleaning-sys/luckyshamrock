@@ -55,13 +55,35 @@ function WaitlistCapture({ email, postalCode, message }) {
   );
 }
 
+// Pickup day-of-week → date-fns-style index (0=Sun..6=Sat)
+const PICKUP_DOW = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5 };
+const PICKUP_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+const CADENCE_INTERVAL = { monthly: 'every 4 weeks', quarterly: 'every 13 weeks', biweekly: 'every 2 weeks' };
+
+// First clean = day after the NEXT pickup-day-of-week strictly after today.
+// Mirrors lib/schedule.ts so the preview matches the booking confirmation.
+function firstCleanDate(pickupDay) {
+  if (!pickupDay) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = PICKUP_DOW[pickupDay];
+  let delta = target - today.getDay();
+  if (delta <= 0) delta += 7;
+  const clean = new Date(today);
+  clean.setDate(today.getDate() + delta + 1); // pickup + 1
+  return clean;
+}
+
+function fmtNice(d) {
+  return d ? d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }) : '—';
+}
+
 // ===== Booking flow =====
 const Booking = ({ tweaks }) => {
   const [step, setStep] = useStateBk(1);
   const [service, setService] = useStateBk('monthly');
   const [bins, setBins] = useStateBk(1);
   const [selectedDay, setSelectedDay] = useStateBk(null);
-  const [selectedTime, setSelectedTime] = useStateBk(null);
   const [contact, setContact] = useStateBk({
     name: '',
     email: '',
@@ -69,7 +91,7 @@ const Booking = ({ tweaks }) => {
     street: '',
     city: 'Fort Saskatchewan',
     postalCode: '',
-    pickupDay: 'monday',
+    pickupDay: '',
   });
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
 
@@ -80,41 +102,41 @@ const Booking = ({ tweaks }) => {
     { id: 'biweekly', title: 'Bi-Weekly', meta: 'Every 2 weeks', price: 19 },
   ];
 
-  // Generate next 28 days (mock calendar)
-  const today = new Date();
+  const isOneoff = service === 'one-time';
+
+  // Real calendar for one-off bookings: every future non-Sunday day is bookable.
+  // (No fake "open slots" — the system has no per-day capacity model at v1.)
   const days = useMemo(() => {
     const arr = [];
-    const start = new Date(today);
-    // pad to first Sunday of view
-    const offset = start.getDay();
-    start.setDate(start.getDate() - offset);
+    const t0 = new Date();
+    t0.setHours(0, 0, 0, 0);
+    const start = new Date(t0);
+    start.setDate(start.getDate() - start.getDay()); // pad to the week's Sunday
     for (let i = 0; i < 35; i++) {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
-      const past = d < new Date(today.setHours(0,0,0,0));
-      const isSun = d.getDay() === 0;
-      arr.push({
-        date: d,
-        day: d.getDate(),
-        month: d.getMonth(),
-        disabled: past || isSun, // closed Sundays
-        hasSlot: !past && !isSun && Math.random() > 0.25
-      });
+      const past = d < t0;
+      const isSun = d.getDay() === 0; // no Sunday service
+      arr.push({ date: d, day: d.getDate(), disabled: past || isSun });
     }
     return arr;
   }, []);
 
-  const timeSlots = ['8:00 AM', '10:00 AM', '11:30 AM', '1:00 PM', '2:30 PM', '4:00 PM'];
-
   const selectedService = services.find(s => s.id === service);
   const subtotal = selectedService.price * bins;
-  const firstCleanFee = service === 'monthly' || service === 'biweekly' || service === 'quarterly' ? 15 : 0;
+  const firstCleanFee = !isOneoff ? 15 : 0;
   const total = subtotal + firstCleanFee;
+
+  // For recurring, the first visit is derived from pickup day; for one-off it's
+  // the explicitly chosen calendar date.
+  const previewDate = isOneoff
+    ? (selectedDay !== null ? days[selectedDay].date : null)
+    : firstCleanDate(contact.pickupDay);
 
   const canAdvance = {
     1: !!service,
-    2: !!selectedDay && !!selectedTime,
-    3: contact.name && contact.email && contact.phone && contact.street && contact.postalCode && contact.pickupDay,
+    2: isOneoff ? selectedDay !== null : !!contact.pickupDay,
+    3: contact.name && contact.email && contact.phone && contact.street && contact.postalCode,
     4: true
   };
 
@@ -125,8 +147,15 @@ const Booking = ({ tweaks }) => {
     setSubmitState({ phase: 'sending' });
 
     const plan = SERVICE_TO_PLAN[service] || 'monthly';
-    const oneoffDate = selectedDay !== null
-      ? days[selectedDay].date.toISOString().slice(0, 10)
+    // Build YYYY-MM-DD from the LOCAL date parts — toISOString() would shift the
+    // day backward for evening Mountain-Time bookings.
+    const oneoffDate = (plan === 'oneoff' && selectedDay !== null)
+      ? (() => {
+          const d = days[selectedDay].date;
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${d.getFullYear()}-${mm}-${dd}`;
+        })()
       : null;
 
     const payload = {
@@ -136,7 +165,9 @@ const Booking = ({ tweaks }) => {
       street: contact.street,
       city: contact.city || 'Fort Saskatchewan',
       postal_code: contact.postalCode,
-      pickup_day: contact.pickupDay,
+      // Recurring schedules are driven by pickup_day; one-offs use oneoff_date,
+      // but the API still requires a valid pickup_day, so default it.
+      pickup_day: contact.pickupDay || 'monday',
       bin_count: bins,
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
@@ -200,7 +231,7 @@ const Booking = ({ tweaks }) => {
           <div className="booking-card">
             {step < 4 && (
               <div className="booking-steps">
-                {['Service', 'Date & Time', 'Your Info', 'Confirm'].map((label, i) => {
+                {['Service', 'Schedule', 'Your Info', 'Confirm'].map((label, i) => {
                   const n = i + 1;
                   return (
                     <div
@@ -275,32 +306,76 @@ const Booking = ({ tweaks }) => {
                     disabled={!canAdvance[1]}
                     style={{width: '100%'}}
                   >
-                    Pick a date <Icon.Arrow size={16}/>
+                    Continue <Icon.Arrow size={16}/>
                   </button>
                 </div>
               </div>
             )}
 
-            {step === 2 && (
+            {step === 2 && !isOneoff && (
               <div>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14}}>
-                  <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 18}}>
-                    {monthName}
+                <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 18, marginBottom: 6}}>
+                  Which day is your garbage pickup?
+                </div>
+                <div style={{fontSize: 13, color: 'var(--ink-3)', marginBottom: 16}}>
+                  We clean the day after your bins go out, so they're empty. {CADENCE_INTERVAL[service] ? `We'll come back ${CADENCE_INTERVAL[service]}.` : ''}
+                </div>
+
+                <div className="pickup-days" style={{display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8}}>
+                  {PICKUP_DAYS.map(d => (
+                    <button
+                      key={d}
+                      className={`service-option ${contact.pickupDay === d ? 'selected' : ''}`}
+                      style={{textAlign: 'center', padding: '14px 4px', textTransform: 'capitalize'}}
+                      onClick={() => setContact({...contact, pickupDay: d})}
+                    >
+                      <div className="so-title" style={{margin: 0, fontSize: 14}}>{d.slice(0, 3)}</div>
+                    </button>
+                  ))}
+                </div>
+
+                {contact.pickupDay && previewDate && (
+                  <div className="booking-summary" style={{marginTop: 18}}>
+                    <div className="booking-summary-row">
+                      <span>Your first clean</span>
+                      <span><strong>{fmtNice(previewDate)}</strong></span>
+                    </div>
+                    <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
+                      <span>then {CADENCE_INTERVAL[service] || 'on a recurring schedule'}</span>
+                    </div>
                   </div>
-                  <div style={{fontSize: 12, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 6}}>
-                    <span style={{width: 6, height: 6, background: 'var(--toxic)', borderRadius: '50%'}}></span>
-                    open slots
-                  </div>
+                )}
+
+                <div className="booking-nav" style={{marginTop: 24}}>
+                  <button className="btn btn-cream" onClick={() => setStep(1)}>Back</button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setStep(3)}
+                    disabled={!canAdvance[2]}
+                  >
+                    Continue <Icon.Arrow size={16}/>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && isOneoff && (
+              <div>
+                <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 18, marginBottom: 6}}>
+                  Pick your clean day
+                </div>
+                <div style={{fontSize: 13, color: 'var(--ink-3)', marginBottom: 14}}>
+                  {monthName} · we service Monday through Saturday.
                 </div>
                 <div className="cal">
-                  {['S','M','T','W','T','F','S'].map(d => (
-                    <div className="cal-head" key={d}>{d}</div>
+                  {['S','M','T','W','T','F','S'].map((d, i) => (
+                    <div className="cal-head" key={i}>{d}</div>
                   ))}
                   {days.map((d, i) => (
                     <div
                       key={i}
-                      className={`cal-day ${d.disabled ? 'disabled' : ''} ${d.hasSlot && !d.disabled ? 'has-slot' : ''} ${selectedDay === i ? 'selected' : ''}`}
-                      onClick={() => !d.disabled && d.hasSlot && setSelectedDay(i)}
+                      className={`cal-day ${d.disabled ? 'disabled' : ''} ${!d.disabled ? 'has-slot' : ''} ${selectedDay === i ? 'selected' : ''}`}
+                      onClick={() => !d.disabled && setSelectedDay(i)}
                     >
                       {d.day}
                     </div>
@@ -308,23 +383,10 @@ const Booking = ({ tweaks }) => {
                 </div>
 
                 {selectedDay !== null && (
-                  <div>
-                    <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 16, marginTop: 24, marginBottom: 4}}>
-                      Pick a time slot
-                    </div>
-                    <div style={{fontSize: 13, color: 'var(--ink-3)', marginBottom: 4}}>
-                      {days[selectedDay].date.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' })}
-                    </div>
-                    <div className="time-slots">
-                      {timeSlots.map(t => (
-                        <button
-                          key={t}
-                          className={`time-slot ${selectedTime === t ? 'selected' : ''}`}
-                          onClick={() => setSelectedTime(t)}
-                        >
-                          {t}
-                        </button>
-                      ))}
+                  <div className="booking-summary" style={{marginTop: 18}}>
+                    <div className="booking-summary-row">
+                      <span>Your clean day</span>
+                      <span><strong>{fmtNice(days[selectedDay].date)}</strong></span>
                     </div>
                   </div>
                 )}
@@ -405,19 +467,21 @@ const Booking = ({ tweaks }) => {
                     />
                   </div>
                 </div>
-                <div className="field">
-                  <label>Pickup day (matches your city's garbage day)</label>
-                  <select
-                    value={contact.pickupDay}
-                    onChange={e => setContact({...contact, pickupDay: e.target.value})}
-                  >
-                    <option value="monday">Monday</option>
-                    <option value="tuesday">Tuesday</option>
-                    <option value="wednesday">Wednesday</option>
-                    <option value="thursday">Thursday</option>
-                    <option value="friday">Friday</option>
-                  </select>
-                </div>
+                {isOneoff && (
+                  <div className="field">
+                    <label>Garbage pickup day (we clean the day after)</label>
+                    <select
+                      value={contact.pickupDay || 'monday'}
+                      onChange={e => setContact({...contact, pickupDay: e.target.value})}
+                    >
+                      <option value="monday">Monday</option>
+                      <option value="tuesday">Tuesday</option>
+                      <option value="wednesday">Wednesday</option>
+                      <option value="thursday">Thursday</option>
+                      <option value="friday">Friday</option>
+                    </select>
+                  </div>
+                )}
                 <div className="field">
                   <label>Bin location (so we don't wake the dog)</label>
                   <select defaultValue="side">
@@ -458,9 +522,7 @@ const Booking = ({ tweaks }) => {
                     <span>
                       {submitState.phase === 'success' && submitState.firstVisitDate
                         ? submitState.firstVisitDate
-                        : selectedDay !== null
-                          ? `${days[selectedDay].date.toLocaleDateString('en', {month: 'short', day: 'numeric'})}, ${selectedTime}`
-                          : '—'}
+                        : fmtNice(previewDate)}
                     </span>
                   </div>
                   <div className="booking-summary-row">
@@ -511,7 +573,6 @@ const Booking = ({ tweaks }) => {
                       onClick={() => {
                         setStep(1);
                         setSelectedDay(null);
-                        setSelectedTime(null);
                         setSubmitState({ phase: 'idle' });
                       }}
                     >
