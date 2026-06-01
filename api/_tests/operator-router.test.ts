@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import handler from '../operator/[...path].js';
+import handler from '../operator/[action].js';
 
-// The catch-all dispatcher. These assert ROUTING only — each route is proven by
-// a status code only the correct handler produces, without needing DB rows.
+// The single-segment operator router. These assert ROUTING only — each route is
+// proven by a status code only the correct handler produces, without DB rows.
 beforeAll(() => {
   process.env.OPERATOR_SECRET = 'o'.repeat(48);
   process.env.OPERATOR_PASSWORD = 'lucky-route-2026';
@@ -19,84 +19,63 @@ function mockRes() {
   return res;
 }
 
-function req(path: string[], method: string, extra: Record<string, unknown> = {}): any {
-  return { method, headers: {}, query: { path }, ...extra };
+// query.action form (test-friendly fallback path in resolveAction).
+function qReq(action: string, method: string, extra: Record<string, unknown> = {}): any {
+  return { method, headers: {}, query: { action }, ...extra };
 }
 
-// Mimics how Vercel actually invokes the function in prod: req.url is set and
-// the [...path] query param is ABSENT. resolvePath must fall back to the URL.
+// req.url form — how Vercel actually invokes the function (query.action empty).
 function urlReq(url: string, method: string, extra: Record<string, unknown> = {}): any {
   return { method, headers: {}, query: {}, url, ...extra };
 }
 
-describe('operator catch-all router', () => {
-  it('routes /login to the login handler (400 on missing password)', async () => {
+describe('operator single-segment router', () => {
+  it('routes /login (400 on missing password)', async () => {
     const res = mockRes();
-    await handler(req(['login'], 'POST', { body: {} }), res);
-    expect(res.statusCode).toBe(400); // handleLogin validation, proves routing
+    await handler(qReq('login', 'POST', { body: {} }), res);
+    expect(res.statusCode).toBe(400);
   });
 
-  it('routes /today to the today handler (401 without operator cookie)', async () => {
+  it('routes /today (401 without operator cookie)', async () => {
     const res = mockRes();
-    await handler(req(['today'], 'GET'), res);
+    await handler(qReq('today', 'GET'), res);
     expect(res.statusCode).toBe(401);
   });
 
-  it('routes /upcoming to the upcoming handler (401 without operator cookie)', async () => {
+  it('routes /upcoming (401 without operator cookie)', async () => {
     const res = mockRes();
-    await handler(req(['upcoming'], 'GET'), res);
+    await handler(qReq('upcoming', 'GET'), res);
     expect(res.statusCode).toBe(401);
   });
 
-  it('routes /visit/:id/notify to the notify handler (401 without operator cookie)', async () => {
+  it('routes /act (401 without operator cookie, before body validation)', async () => {
     const res = mockRes();
-    await handler(req(['visit', 'some-id', 'notify'], 'POST'), res);
+    await handler(qReq('act', 'POST', { body: { id: 'x', op: 'notify' } }), res);
     expect(res.statusCode).toBe(401);
   });
 
-  it('404s an unknown single-segment path', async () => {
+  it('404s an unknown action', async () => {
     const res = mockRes();
-    await handler(req(['bogus'], 'GET'), res);
+    await handler(qReq('bogus', 'GET'), res);
     expect(res.statusCode).toBe(404);
   });
 
-  it('404s an unknown visit action', async () => {
+  it('404s when no action can be resolved', async () => {
     const res = mockRes();
-    await handler(req(['visit', 'some-id', 'teleport'], 'POST'), res);
+    await handler({ method: 'GET', headers: {}, query: {} } as any, res);
     expect(res.statusCode).toBe(404);
   });
 
-  it('404s a malformed visit path (missing action)', async () => {
-    const res = mockRes();
-    await handler(req(['visit', 'some-id'], 'POST'), res);
-    expect(res.statusCode).toBe(404);
-  });
-
-  // The prod path: route from req.url with no [...path] query param.
-  it('routes by req.url when the path query param is absent (today → 401)', async () => {
+  // The prod path: resolve the action from req.url with query.action absent.
+  it('routes by req.url for /today (→ 401)', async () => {
     const res = mockRes();
     await handler(urlReq('/api/operator/today', 'GET'), res);
     expect(res.statusCode).toBe(401);
   });
 
-  it('routes by req.url for login with a query string (→ 400 missing password)', async () => {
+  it('routes by req.url for /act with a query string (→ 401 no cookie)', async () => {
     const res = mockRes();
-    await handler(urlReq('/api/operator/login?foo=bar', 'POST', { body: {} }), res);
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('routes by req.url for a visit action and extracts the id (notify → 401)', async () => {
-    const res = mockRes();
-    const r = urlReq('/api/operator/visit/abc-123/notify', 'POST');
-    await handler(r, res);
+    await handler(urlReq('/api/operator/act?foo=bar', 'POST', { body: { id: 'x', op: 'done' } }), res);
     expect(res.statusCode).toBe(401);
-    // resolvePath must have populated req.query.id for the handler.
-    expect(r.query.id).toBe('abc-123');
-  });
-
-  it('404s an unknown action routed by req.url', async () => {
-    const res = mockRes();
-    await handler(urlReq('/api/operator/visit/abc-123/teleport', 'POST'), res);
-    expect(res.statusCode).toBe(404);
   });
 });

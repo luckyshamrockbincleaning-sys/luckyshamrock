@@ -93,7 +93,7 @@ describe('POST /api/book — happy path', () => {
     expect(res.statusCode).toBe(405);
   });
 
-  it('issues a magic_link_token and writes notification_log rows on success', async () => {
+  it('issues a magic_link_token and sends exactly one booking_confirmed email', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',
       body: { ...validBody, plan: 'monthly' },
@@ -107,11 +107,14 @@ describe('POST /api/book — happy path', () => {
     expect(tokens).toHaveLength(1);
     expect(tokens[0]!.consumedAt).toBeNull();
 
+    // Exactly ONE email at booking: booking_confirmed (which carries the manage
+    // link). We do NOT also send a magic_link email — both would embed the same
+    // single-use token, so the second link clicked would be dead.
     const logs = await db.select().from(notificationLog);
-    expect(logs.length).toBeGreaterThanOrEqual(2);
-    const kinds = new Set(logs.map((l) => l.kind));
-    expect(kinds.has('booking_confirmed')).toBe(true);
-    expect(kinds.has('magic_link')).toBe(true);
+    const kinds = logs.map((l) => l.kind);
+    expect(kinds).toContain('booking_confirmed');
+    expect(kinds).not.toContain('magic_link');
+    expect(kinds.filter((k) => k === 'booking_confirmed')).toHaveLength(1);
   });
 });
 

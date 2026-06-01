@@ -6,7 +6,7 @@ import { bookRequestSchema } from '../lib/validation.js';
 import { isInServiceArea, normalizePostalCode } from '../lib/postal.js';
 import { generateVisitDates, type Cadence } from '../lib/schedule.js';
 import { sendAndLog } from '../lib/notifications.js';
-import { bookingConfirmedTemplate, magicLinkTemplate } from '../lib/email/templates.js';
+import { bookingConfirmedTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
 
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -142,7 +142,12 @@ export default async function handler(
     const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
     const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(tokenPlain)}`;
 
-    // Send booking_confirmed — idempotent on (firstVisitId, 'booking_confirmed')
+    // Send ONE email at booking: booking_confirmed already carries the manage
+    // link built from `tokenPlain`. We deliberately do NOT also send a separate
+    // magic_link email here — both would embed the SAME single-use token, so
+    // whichever link the customer clicked first would consume it and the other
+    // would be dead. The magic_link email is reserved for the /manage
+    // "email me a link" flow, which mints its own fresh token.
     const bookingTemplate = bookingConfirmedTemplate({
       name: data.name,
       firstVisitDate,
@@ -156,18 +161,6 @@ export default async function handler(
       html: bookingTemplate.html,
       customerId,
       visitId: firstVisitId,
-    });
-
-    // Send magic_link — visitId: null, no idempotency check (each booking issues a fresh token)
-    const mlTemplate = magicLinkTemplate({ manageUrl });
-    await sendAndLog({
-      kind: 'magic_link',
-      to: data.email,
-      subject: mlTemplate.subject,
-      body: mlTemplate.text,
-      html: mlTemplate.html,
-      customerId,
-      visitId: null,
     });
 
     res.status(200).json({

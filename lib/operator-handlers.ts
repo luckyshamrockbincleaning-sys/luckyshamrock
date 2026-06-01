@@ -27,6 +27,9 @@ import { onOurWayTemplate, doneTemplate } from './email/templates.js';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
+const actSchema = z
+  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note']) })
+  .passthrough(); // keep `text` through for the note op
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -382,4 +385,41 @@ export async function handleNote(req: VercelRequest, res: VercelResponse): Promi
     const message = err instanceof Error ? err.message : 'unknown_error';
     res.status(500).json({ status: 'error', message });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/act  → single-segment entry for visit actions
+//
+// Vercel's runtime only matches our 1-segment operator route reliably; a
+// 2+/-segment path (visit/:id/:action) 404'd at the platform before reaching
+// the function. So visit actions come in through this one route with the visit
+// id + op in the BODY ({id, op, text?}) instead of the URL. It validates, then
+// delegates to the existing per-op handlers, which read the id off req.query.id.
+// ─────────────────────────────────────────────────────────────────────
+const ACT_HANDLERS: Record<string, (req: VercelRequest, res: VercelResponse) => Promise<void>> = {
+  notify: handleNotify,
+  done: handleDone,
+  skip: handleSkip,
+  note: handleNote,
+};
+
+export async function handleAct(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  // Auth-check up front so a bad/no cookie returns 401 before body validation.
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = actSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  // Bridge to the per-op handlers, which expect the visit id on req.query.id.
+  (req.query as Record<string, string | string[]>).id = parsed.data.id;
+  return ACT_HANDLERS[parsed.data.op]!(req, res);
 }

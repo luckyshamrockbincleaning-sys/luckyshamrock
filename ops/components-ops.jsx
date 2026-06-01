@@ -152,25 +152,23 @@ function OpsApp() {
     setBusy(true);
     setFlash({ kind: '', text: '' });
     try {
-      let url;
-      let body;
+      // All visit actions go through the single-segment /api/operator/act route
+      // (id + op in the body) — multi-segment operator URLs 404 in Vercel's runtime.
+      const body = { id: stop.id, op: action };
       if (action === 'note') {
         const text = window.prompt(`Add a note for ${stop.customer_name}:`, '');
         if (!text || !text.trim()) {
           setBusy(false);
           return;
         }
-        url = `/api/operator/visit/${stop.id}/note`;
-        body = { text: text.trim() };
-      } else {
-        url = `/api/operator/visit/${stop.id}/${action}`;
+        body.text = text.trim();
       }
 
-      const r = await fetch(url, {
+      const r = await fetch('/api/operator/act', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: body ? { 'content-type': 'application/json' } : {},
-        body: body ? JSON.stringify(body) : undefined,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
       });
       if (r.status === 401) {
         setAuthed(false);
