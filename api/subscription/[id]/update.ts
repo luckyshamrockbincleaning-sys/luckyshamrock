@@ -5,11 +5,11 @@ import { addWeeks } from 'date-fns';
 import { getDb } from '../../../db/client.js';
 import { customer, subscription, visit } from '../../../db/schema.js';
 import { getSessionCustomerId } from '../../../lib/session.js';
-import { generateVisitDates, type Cadence } from '../../../lib/schedule.js';
+import { generateVisitDates, generateSeasonalDates, type Cadence } from '../../../lib/schedule.js';
 
 const updateSchema = z
   .object({
-    cadence: z.enum(['monthly', 'bimonthly', 'quarterly']).optional(),
+    cadence: z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']).optional(),
     bin_count: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   })
   .refine((d) => d.cadence !== undefined || d.bin_count !== undefined, {
@@ -20,6 +20,7 @@ const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
   bimonthly: 6,
   quarterly: 4,
+  seasonal: 3,
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
@@ -92,12 +93,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         const [c] = await tx.select().from(customer).where(eq(customer.id, customerId));
         if (!c) throw new Error('customer row vanished mid-update');
 
-        const dates = generateVisitDates({
-          startDate: today,
-          pickupDay: c.pickupDay,
-          cadence: newCadence,
-          count: FUTURE_VISIT_TARGET[newCadence],
-        });
+        const dates =
+          newCadence === 'seasonal'
+            ? generateSeasonalDates({ startDate: today, pickupDay: c.pickupDay, count: FUTURE_VISIT_TARGET.seasonal })
+            : generateVisitDates({
+                startDate: today,
+                pickupDay: c.pickupDay,
+                cadence: newCadence,
+                count: FUTURE_VISIT_TARGET[newCadence],
+              });
         await tx.insert(visit).values(
           dates.map((scheduledFor) => ({
             id: crypto.randomUUID(),

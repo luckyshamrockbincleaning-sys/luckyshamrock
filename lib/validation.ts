@@ -7,8 +7,8 @@ const emailField = z
   .email('invalid email');
 
 const pickupDay = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']);
-const cadence = z.enum(['monthly', 'bimonthly', 'quarterly']);
-const planField = z.enum(['oneoff', 'monthly', 'bimonthly', 'quarterly']);
+const cadence = z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']);
+const planField = z.enum(['oneoff', 'monthly', 'bimonthly', 'quarterly', 'seasonal']);
 const binCount = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
 export const bookRequestSchema = z

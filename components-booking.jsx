@@ -5,8 +5,7 @@ const { useState: useStateBk, useMemo } = React;
 const SERVICE_TO_PLAN = {
   'one-time': 'oneoff',
   'monthly': 'monthly',
-  'quarterly': 'quarterly',
-  'biweekly': 'bimonthly',
+  'three-wash': 'seasonal',
 };
 
 // ===== Waitlist capture (rendered when /api/book returns 422 out_of_area) =====
@@ -58,7 +57,7 @@ function WaitlistCapture({ email, postalCode, message }) {
 // Pickup day-of-week → date-fns-style index (0=Sun..6=Sat)
 const PICKUP_DOW = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5 };
 const PICKUP_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-const CADENCE_INTERVAL = { monthly: 'every 4 weeks', quarterly: 'every 13 weeks', biweekly: 'every 2 weeks' };
+const CADENCE_INTERVAL = { monthly: 'every 4 weeks', 'three-wash': '3 cleans a year (spring, summer, fall)' };
 
 // First clean = day after the NEXT pickup-day-of-week strictly after today.
 // Mirrors lib/schedule.ts so the preview matches the booking confirmation.
@@ -72,6 +71,26 @@ function firstCleanDate(pickupDay) {
   const clean = new Date(today);
   clean.setDate(today.getDate() + delta + 1); // pickup + 1
   return clean;
+}
+
+// Seasonal preview: first clean-day (pickup+1) on/after the next Apr/Jul/Sep
+// lead month strictly after today. Mirrors lib/schedule.ts generateSeasonalDates.
+const SEASON_LEAD_MONTHS = [3, 6, 8]; // Apr, Jul, Sep (0-based)
+function firstSeasonalDate(pickupDay) {
+  if (!pickupDay) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cleanDow = (PICKUP_DOW[pickupDay] + 1) % 7;
+  for (let year = today.getFullYear(); year <= today.getFullYear() + 1; year++) {
+    for (const m of SEASON_LEAD_MONTHS) {
+      const lead = new Date(year, m, 1);
+      let delta = cleanDow - lead.getDay();
+      if (delta < 0) delta += 7;
+      const wash = new Date(year, m, 1 + delta);
+      if (wash.getTime() > today.getTime()) return wash;
+    }
+  }
+  return null;
 }
 
 function fmtNice(d) {
@@ -96,13 +115,13 @@ const Booking = ({ tweaks }) => {
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
 
   const services = [
-    { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: 49 },
-    { id: 'monthly', title: 'Monthly', meta: 'Every 4 weeks', price: 25 },
-    { id: 'quarterly', title: 'Quarterly', meta: '4× per year', price: 35 },
-    { id: 'biweekly', title: 'Bi-Weekly', meta: 'Every 2 weeks', price: 19 },
+    { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: 45 },
+    { id: 'monthly', title: 'Monthly', meta: 'Every 4 weeks', price: 35 },
+    { id: 'three-wash', title: 'Three Wash Season', meta: '3 cleans a year', price: 105 },
   ];
 
   const isOneoff = service === 'one-time';
+  const isSeasonal = service === 'three-wash';
 
   // Real calendar for one-off bookings: every future non-Sunday day is bookable.
   // (No fake "open slots" — the system has no per-day capacity model at v1.)
@@ -127,11 +146,13 @@ const Booking = ({ tweaks }) => {
   const firstCleanFee = !isOneoff ? 15 : 0;
   const total = subtotal + firstCleanFee;
 
-  // For recurring, the first visit is derived from pickup day; for one-off it's
-  // the explicitly chosen calendar date.
+  // One-off → the explicitly chosen calendar date; seasonal → next Apr/Jul/Sep
+  // wash; other recurring → first clean derived from pickup day.
   const previewDate = isOneoff
     ? (selectedDay !== null ? days[selectedDay].date : null)
-    : firstCleanDate(contact.pickupDay);
+    : isSeasonal
+      ? firstSeasonalDate(contact.pickupDay)
+      : firstCleanDate(contact.pickupDay);
 
   const canAdvance = {
     1: !!service,
@@ -318,7 +339,7 @@ const Booking = ({ tweaks }) => {
                   Which day is your garbage pickup?
                 </div>
                 <div style={{fontSize: 13, color: 'var(--ink-3)', marginBottom: 16}}>
-                  We clean the day after your bins go out, so they're empty. {CADENCE_INTERVAL[service] ? `We'll come back ${CADENCE_INTERVAL[service]}.` : ''}
+                  We clean the day after your garbage bin goes out, so it's empty. {isSeasonal ? "Three cleans a year — spring, summer, and fall." : (CADENCE_INTERVAL[service] ? `We'll come back ${CADENCE_INTERVAL[service]}.` : '')}
                 </div>
 
                 <div className="pickup-days" style={{display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8}}>

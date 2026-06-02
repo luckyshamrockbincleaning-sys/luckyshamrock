@@ -4,15 +4,16 @@ import { addWeeks } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
-import type { Cadence } from '../lib/schedule.js';
+import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 
 const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
   bimonthly: 6,
   quarterly: 4,
+  seasonal: 3,
 };
 
-const CADENCE_WEEKS: Record<Cadence, number> = {
+const CADENCE_WEEKS: Record<Exclude<Cadence, 'seasonal'>, number> = {
   monthly: 4,
   bimonthly: 8,
   quarterly: 13,
@@ -75,12 +76,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           .orderBy(desc(visit.scheduledFor))
           .limit(1);
         const anchorDate = anchor?.scheduledFor ?? today;
-        const stepWeeks = CADENCE_WEEKS[sub.cadence];
-        const newRows = Array.from({ length: deficit }, (_, i) => ({
+        let newDates: Date[];
+        if (sub.cadence === 'seasonal') {
+          // Seasonal: extend with the next `deficit` Apr/Jul/Sep washes after the anchor.
+          newDates = generateSeasonalDates({ startDate: anchorDate, pickupDay: me.pickupDay, count: deficit });
+        } else {
+          const stepWeeks = CADENCE_WEEKS[sub.cadence];
+          newDates = Array.from({ length: deficit }, (_, i) => addWeeks(anchorDate, (i + 1) * stepWeeks));
+        }
+        const newRows = newDates.map((scheduledFor) => ({
           id: crypto.randomUUID(),
           customerId,
           subscriptionId: sub.id,
-          scheduledFor: addWeeks(anchorDate, (i + 1) * stepWeeks),
+          scheduledFor,
         }));
         await db.insert(visit).values(newRows);
       }

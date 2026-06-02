@@ -2,11 +2,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { eq } from 'drizzle-orm';
 import { addWeeks } from 'date-fns';
 import { getDb } from '../../../db/client.js';
-import { visit, subscription } from '../../../db/schema.js';
+import { visit, subscription, customer } from '../../../db/schema.js';
 import { getSessionCustomerId } from '../../../lib/session.js';
-import type { Cadence } from '../../../lib/schedule.js';
+import { generateSeasonalDates, type Cadence } from '../../../lib/schedule.js';
 
-const CADENCE_WEEKS: Record<Cadence, number> = {
+const CADENCE_WEEKS: Record<Exclude<Cadence, 'seasonal'>, number> = {
   monthly: 4,
   bimonthly: 8,
   quarterly: 13,
@@ -62,8 +62,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    const stepWeeks = CADENCE_WEEKS[sub.cadence];
-    const replacementDate = addWeeks(v.scheduledFor, stepWeeks);
+    // Replacement = one cadence interval later. Seasonal plans skip to the next
+    // Apr/Jul/Sep window rather than a fixed number of weeks.
+    let replacementDate: Date;
+    if (sub.cadence === 'seasonal') {
+      const [c] = await db.select().from(customer).where(eq(customer.id, customerId));
+      if (!c) {
+        res.status(500).json({ status: 'error', message: 'customer row vanished' });
+        return;
+      }
+      replacementDate = generateSeasonalDates({ startDate: v.scheduledFor, pickupDay: c.pickupDay, count: 1 })[0]!;
+    } else {
+      replacementDate = addWeeks(v.scheduledFor, CADENCE_WEEKS[sub.cadence]);
+    }
 
     await db.transaction(async (tx) => {
       await tx.update(visit).set({ status: 'skipped' }).where(eq(visit.id, visitId));

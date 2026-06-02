@@ -53,25 +53,38 @@ export function onOurWayTemplate(p: { name: string }): RenderedEmail {
   const subject = `We're on the way`;
   const text =
     `Hi ${p.name},\n\n` +
-    `Lucky Shamrock is heading to your bins now. We'll be in and out — no need to be home.\n\n` +
+    `Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.\n\n` +
     FOOTER_TEXT;
   const html =
     `<p>Hi ${escapeHtml(p.name)},</p>` +
-    `<p>Lucky Shamrock is heading to your bins now. We'll be in and out — no need to be home.</p>` +
+    `<p>Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.</p>` +
     FOOTER_HTML;
   return { subject, html, text };
 }
 
-export function doneTemplate(p: { name: string; nextVisitDate: string | null }): RenderedEmail {
-  const subject = `Your bins are clean`;
+export function doneTemplate(p: {
+  name: string;
+  nextVisitDate: string | null;
+  reviewUrl?: string | null;
+}): RenderedEmail {
+  const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
+  const reviewText = p.reviewUrl
+    ? `\n\nLoved it? Leave us a review: ${p.reviewUrl}`
+    : '';
+  const reviewHtml = p.reviewUrl
+    ? `<p><a href="${escapeAttr(p.reviewUrl)}">Loved it? Leave us a review →</a></p>`
+    : '';
   const text =
     `Hi ${p.name},\n\n` +
-    `Bins cleaned. ${nextLine}\n\n` +
+    `Garbage bin cleaned. ${nextLine}` +
+    reviewText +
+    `\n\n` +
     FOOTER_TEXT;
   const html =
     `<p>Hi ${escapeHtml(p.name)},</p>` +
-    `<p>Bins cleaned. ${escapeHtml(nextLine)}</p>` +
+    `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
+    reviewHtml +
     FOOTER_HTML;
   return { subject, html, text };
 }

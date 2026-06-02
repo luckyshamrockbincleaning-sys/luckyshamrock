@@ -6,6 +6,7 @@ const { useState, useEffect, useCallback } = React;
 
 const CADENCE_LABEL = {
   monthly: 'Monthly (every 4 weeks)',
+  seasonal: 'Three Wash Season (3×/year)',
   bimonthly: 'Bimonthly (every 8 weeks)',
   quarterly: 'Quarterly (every 13 weeks)',
 };

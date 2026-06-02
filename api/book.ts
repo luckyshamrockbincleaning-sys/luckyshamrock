@@ -4,15 +4,17 @@ import { getDb } from '../db/client.js';
 import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
 import { bookRequestSchema } from '../lib/validation.js';
 import { isInServiceArea, normalizePostalCode } from '../lib/postal.js';
-import { generateVisitDates, type Cadence } from '../lib/schedule.js';
+import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
 
+// How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
   monthly: 12,
   bimonthly: 6,
   quarterly: 4,
+  seasonal: 3, // Three Wash Season — 3 cleans/year (Apr, Jul, Sep)
 };
 
 export default async function handler(
@@ -83,12 +85,15 @@ export default async function handler(
     } else {
       subscriptionId = crypto.randomUUID();
       cadence = data.plan;
-      visitDates = generateVisitDates({
-        startDate,
-        pickupDay: data.pickup_day,
-        cadence,
-        count: RECURRING_COUNT[cadence],
-      });
+      visitDates =
+        cadence === 'seasonal'
+          ? generateSeasonalDates({ startDate, pickupDay: data.pickup_day, count: RECURRING_COUNT.seasonal })
+          : generateVisitDates({
+              startDate,
+              pickupDay: data.pickup_day,
+              cadence,
+              count: RECURRING_COUNT[cadence],
+            });
     }
 
     const visitRows = visitDates.map((scheduledFor) => ({

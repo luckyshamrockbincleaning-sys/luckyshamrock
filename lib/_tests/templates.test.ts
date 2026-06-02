@@ -52,6 +52,18 @@ describe('doneTemplate', () => {
     expect(withoutNext.text).toContain('Sam');
     expect(withoutNext.text).not.toContain('Next clean');
   });
+
+  it('includes a review link when reviewUrl is provided', () => {
+    const withReview = doneTemplate({ name: 'Sam', nextVisitDate: null, reviewUrl: 'https://g.page/r/review' });
+    expect(withReview.text).toContain('https://g.page/r/review');
+    expect(withReview.html).toContain('https://g.page/r/review');
+    expect(withReview.text.toLowerCase()).toContain('review');
+  });
+
+  it('omits the review CTA when no reviewUrl is given', () => {
+    const noReview = doneTemplate({ name: 'Sam', nextVisitDate: null });
+    expect(noReview.text.toLowerCase()).not.toContain('review');
+  });
 });
 
 describe('all templates produce non-empty html and text', () => {

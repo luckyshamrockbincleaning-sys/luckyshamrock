@@ -284,7 +284,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     await db.update(visit).set({ status: 'done', doneAt: new Date() }).where(eq(visit.id, visitId));
 
     // Idempotent on (visitId, 'done').
-    const tpl = doneTemplate({ name: row.name, nextVisitDate });
+    const tpl = doneTemplate({ name: row.name, nextVisitDate, reviewUrl: process.env.REVIEW_URL || null });
     const result = await sendAndLog({
       kind: 'done',
       to: row.email,

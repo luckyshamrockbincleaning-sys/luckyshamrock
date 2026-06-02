@@ -27,6 +27,7 @@ export const cadenceEnum = pgEnum('cadence', [
   'monthly',
   'bimonthly',
   'quarterly',
+  'seasonal',
 ]);
 
 export const subscriptionStatusEnum = pgEnum('subscription_status', [
