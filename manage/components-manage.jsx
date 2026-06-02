@@ -194,6 +194,110 @@ function VisitsCard({ visits, onSkip, busyVisitId }) {
   );
 }
 
+// Loads Stripe.js once (from the official CDN) and resolves window.Stripe.
+let _stripeJsPromise = null;
+function loadStripeJs() {
+  if (window.Stripe) return Promise.resolve(window.Stripe);
+  if (!_stripeJsPromise) {
+    _stripeJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://js.stripe.com/v3/';
+      s.onload = () => resolve(window.Stripe);
+      s.onerror = () => reject(new Error('Failed to load Stripe.js'));
+      document.head.appendChild(s);
+    });
+  }
+  return _stripeJsPromise;
+}
+
+function PaymentCard({ customer, onSaved }) {
+  const [phase, setPhase] = useState('idle'); // idle | loading | ready | saving | saved | error
+  const [err, setErr] = useState('');
+  const elementsRef = React.useRef(null);
+  const stripeRef = React.useRef(null);
+
+  async function startAddCard() {
+    setErr('');
+    setPhase('loading');
+    try {
+      // Get a SetupIntent + publishable key from our backend.
+      const r = await fetch('/api/me', { method: 'POST', credentials: 'same-origin' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || 'Card setup is unavailable right now.');
+
+      const Stripe = await loadStripeJs();
+      const stripe = Stripe(j.publishable_key);
+      stripeRef.current = stripe;
+      const elements = stripe.elements({ clientSecret: j.client_secret });
+      elementsRef.current = elements;
+      const paymentEl = elements.create('payment');
+      // Mount after React paints the container.
+      setPhase('ready');
+      setTimeout(() => {
+        const mountPoint = document.getElementById('card-element');
+        if (mountPoint) paymentEl.mount('#card-element');
+      }, 0);
+    } catch (e) {
+      setErr(e.message);
+      setPhase('error');
+    }
+  }
+
+  async function saveCard() {
+    setErr('');
+    setPhase('saving');
+    try {
+      const { error } = await stripeRef.current.confirmSetup({
+        elements: elementsRef.current,
+        confirmParams: { return_url: window.location.href },
+        redirect: 'if_required',
+      });
+      if (error) throw new Error(error.message || 'Could not save the card.');
+      setPhase('saved');
+      if (onSaved) await onSaved();
+    } catch (e) {
+      setErr(e.message);
+      setPhase('error');
+    }
+  }
+
+  return (
+    <div className="manage-card">
+      <h2>Payment method</h2>
+      {customer.has_card ? (
+        <div>
+          <div className="manage-row"><span>Card on file</span><span className="v">✓ saved</span></div>
+          {phase !== 'ready' && (
+            <button className="btn btn-ghost" style={{marginTop: 10}} onClick={startAddCard}>Replace card</button>
+          )}
+        </div>
+      ) : (
+        phase === 'idle' && (
+          <>
+            <p className="muted" style={{marginBottom: 12}}>
+              Save a card so we can charge automatically after each clean. You're only charged once your bin is clean.
+            </p>
+            <button className="btn btn-primary" onClick={startAddCard}>Add a card</button>
+          </>
+        )
+      )}
+
+      <Flash kind="err" text={err} />
+
+      {(phase === 'ready' || phase === 'saving') && (
+        <div style={{marginTop: 12}}>
+          <div id="card-element" />
+          <button className="btn btn-primary" style={{marginTop: 12}} disabled={phase === 'saving'} onClick={saveCard}>
+            {phase === 'saving' ? 'Saving…' : 'Save card'}
+          </button>
+        </div>
+      )}
+      {phase === 'loading' && <p className="muted" style={{marginTop: 10}}>Loading secure card form…</p>}
+      {phase === 'saved' && <p style={{marginTop: 10, color: 'var(--green-deep)'}}>Card saved. ✓</p>}
+    </div>
+  );
+}
+
 function ManageApp() {
   const [state, setState] = useState({ loading: true, me: null, error: null });
   const [flash, setFlash] = useState({ kind: '', text: '' });
@@ -312,6 +416,9 @@ function ManageApp() {
             />
           )}
           <VisitsCard visits={state.me.upcoming_visits} onSkip={onSkip} busyVisitId={busyVisitId} />
+          {state.me.billing_enabled && (
+            <PaymentCard customer={state.me.customer} onSaved={load} />
+          )}
           <div style={{textAlign: 'center', marginTop: 16}}>
             <button className="btn btn-ghost" onClick={onLogout}>Sign out</button>
           </div>

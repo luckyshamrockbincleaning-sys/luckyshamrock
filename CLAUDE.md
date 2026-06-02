@@ -153,6 +153,32 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
 - **`/ops` page** is filesystem-routed like `/manage` (no `vercel.json`): the
   `ops/` dir (`index.html` + `app-ops.jsx` + `components-ops.jsx` + `ops.css`).
 
+## Payments / Stripe conventions (Phase 6)
+
+- **Graceful degradation is load-bearing.** `lib/stripe.ts` (`getStripe` +
+  `isStripeConfigured`) and `lib/billing.ts` return null / `{ok:false}` and NEVER
+  throw when keys are absent — booking and the operator "Done" flow must work
+  with or without Stripe. Same philosophy as the Gmail stub.
+- **We bill per-visit, not via Stripe Subscriptions.** Card saved at booking
+  (Stripe Customer + SetupIntent), charged on the operator **Done** tap
+  (off-session PaymentIntent). Keeps skip/seasonal/discount logic ours.
+- **Prices are server-side only** (`lib/pricing.ts`, in cents). NEVER trust a
+  client-sent amount. Discount comes from the operator (`discount_cents` on the
+  `done` op), clamped to `[0, base]`.
+- **A charge failure never blocks "Done."** Declined card → `visit.payment_status
+  = 'failed'` + a flagged `payment` row; the clean still completes. Full discount
+  → `comped` (no Stripe call).
+- **The webhook is the source of truth** for payment state
+  (`api/stripe/webhook.ts` → `lib/billing-webhook.ts`). It needs the RAW body, so
+  it sets `export const config = { api: { bodyParser: false } }`. It's the ONE
+  Stripe function — **we're at 12/12 on Vercel Hobby.** Adding ANY new function
+  now fails the build; consolidate or upgrade to Pro first.
+- **Card-setup endpoint is folded into `POST /api/me`** (not its own function) to
+  respect the 12-cap. Manage page's `PaymentCard` loads Stripe.js + Elements.
+- **Env:** `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`.
+  Use `sk_test_`/`pk_test_` until a deliberate live cutover. Pin the SDK
+  `apiVersion` in `lib/stripe.ts` (currently `2026-05-27.dahlia` for stripe@22).
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.

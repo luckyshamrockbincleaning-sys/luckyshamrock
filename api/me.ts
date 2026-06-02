@@ -6,6 +6,7 @@ import { customer, subscription, visit } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
+import { isStripeConfigured } from '../lib/stripe.js';
 
 const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
@@ -159,7 +160,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         city: me.city,
         postal_code: me.postalCode,
         pickup_day: me.pickupDay,
+        has_card: Boolean(me.defaultPaymentMethodId),
       },
+      billing_enabled: isStripeConfigured(),
       subscription: sub
         ? {
             id: sub.id,
