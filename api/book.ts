@@ -8,6 +8,7 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
+import { createStripeCustomer } from '../lib/billing.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -167,6 +168,28 @@ export default async function handler(
       customerId,
       visitId: firstVisitId,
     });
+
+    // Create a Stripe Customer for new customers so a card can be saved later.
+    // OUTSIDE the booking transaction + best-effort: a Stripe hiccup (or no keys)
+    // must never fail a booking. The card itself is collected on the success
+    // screen / /manage via a SetupIntent; this just provisions the customer.
+    if (isNewCustomer) {
+      try {
+        const stripeCustomerId = await createStripeCustomer({
+          email: data.email,
+          name: data.name,
+          phone: data.phone ?? null,
+        });
+        if (stripeCustomerId) {
+          await db
+            .update(customer)
+            .set({ stripeCustomerId })
+            .where(eq(customer.id, customerId));
+        }
+      } catch (err) {
+        console.error('[book] stripe customer provisioning failed (non-fatal)', err);
+      }
+    }
 
     res.status(200).json({
       status: 'ok',

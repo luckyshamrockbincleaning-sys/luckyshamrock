@@ -186,9 +186,33 @@ describe('GET /api/me', () => {
     expect(visitCount).toHaveLength(1); // unchanged
   });
 
-  it('returns 405 for non-GET', async () => {
+  it('returns 405 for an unsupported method (PUT)', async () => {
+    const res = mockResWithHeaders();
+    await handler(mockReq<typeof handler>({ method: 'PUT' }), res);
+    expect(res.statusCode).toBe(405);
+  });
+
+  it('POST returns 401 without a session', async () => {
     const res = mockResWithHeaders();
     await handler(mockReq<typeof handler>({ method: 'POST' }), res);
-    expect(res.statusCode).toBe(405);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('POST returns 503 billing_unavailable when Stripe is not configured', async () => {
+    // No STRIPE_SECRET_KEY in the test env → createStripeCustomer returns null,
+    // so the SetupIntent path degrades to 503 rather than throwing.
+    const prev = process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_SECRET_KEY;
+    try {
+      const customerId = await makeCustomer();
+      const req = await reqWithSession(customerId);
+      req.method = 'POST';
+      const res = mockResWithHeaders();
+      await handler(req, res);
+      expect(res.statusCode).toBe(503);
+      expect(res.body.status).toBe('billing_unavailable');
+    } finally {
+      if (prev !== undefined) process.env.STRIPE_SECRET_KEY = prev;
+    }
   });
 });

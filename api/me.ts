@@ -5,6 +5,7 @@ import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
+import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 
 const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
@@ -20,7 +21,7 @@ const CADENCE_WEEKS: Record<Exclude<Cadence, 'seasonal'>, number> = {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
-  if (req.method !== 'GET') {
+  if (req.method !== 'GET' && req.method !== 'POST') {
     res.status(405).json({ error: 'method_not_allowed' });
     return;
   }
@@ -28,6 +29,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const customerId = await getSessionCustomerId(req);
   if (!customerId) {
     res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+
+  // POST /api/me → create a SetupIntent so the customer can save a card on file.
+  // Folded into this route (rather than a new function) to stay under Vercel
+  // Hobby's 12-function cap. Provisions a Stripe Customer on the fly if needed.
+  if (req.method === 'POST') {
+    try {
+      const db = getDb();
+      const [me] = await db.select().from(customer).where(eq(customer.id, customerId));
+      if (!me) {
+        res.status(401).json({ status: 'unauthorized' });
+        return;
+      }
+      let stripeCustomerId = me.stripeCustomerId;
+      if (!stripeCustomerId) {
+        stripeCustomerId = await createStripeCustomer({ email: me.email, name: me.name, phone: me.phone });
+        if (stripeCustomerId) {
+          await db.update(customer).set({ stripeCustomerId }).where(eq(customer.id, customerId));
+        }
+      }
+      if (!stripeCustomerId) {
+        res.status(503).json({ status: 'billing_unavailable', message: 'Card payments are not set up yet.' });
+        return;
+      }
+      const setup = await createSetupIntent(stripeCustomerId);
+      if (!setup) {
+        res.status(503).json({ status: 'billing_unavailable', message: 'Card payments are not set up yet.' });
+        return;
+      }
+      res.status(200).json({ status: 'ok', client_secret: setup.clientSecret, publishable_key: setup.publishableKey });
+    } catch (err) {
+      console.error('[me:setup] failed', err);
+      const message = err instanceof Error ? err.message : 'unknown_error';
+      res.status(500).json({ status: 'error', message });
+    }
     return;
   }
 
