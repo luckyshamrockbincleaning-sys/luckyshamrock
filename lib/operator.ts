@@ -116,6 +116,7 @@ export interface OperatorVisitRow {
   id: string;
   scheduledFor: Date;
   status: string;
+  paymentStatus: string;
   notes: string | null;
   headingThereAt: Date | null;
   doneAt: Date | null;
@@ -139,6 +140,7 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     postal_code: r.postalCode,
     bin_count: r.binCount,
     status: r.status,
+    payment_status: r.paymentStatus,
     notes: r.notes,
     heading_there_at: r.headingThereAt,
     done_at: r.doneAt,

@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { and, eq, ne, gt, gte, lte, asc, sql } from 'drizzle-orm';
 import { addDays } from 'date-fns';
 import { getDb } from '../db/client.js';
-import { customer, subscription, visit } from '../db/schema.js';
+import { customer, subscription, visit, payment } from '../db/schema.js';
 import {
   getOperatorSession,
   signOperatorCookie,
@@ -23,6 +23,10 @@ import {
 } from './operator.js';
 import { sendAndLog } from './notifications.js';
 import { onOurWayTemplate, doneTemplate } from './email/templates.js';
+import { isStripeConfigured } from './stripe.js';
+import { chargeOffSession } from './billing.js';
+import { baseChargeCents, finalChargeCents } from './pricing.js';
+import type { Cadence } from './schedule.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const loginSchema = z.object({ password: z.string().min(1) });
@@ -36,6 +40,7 @@ const stopColumns = {
   id: visit.id,
   scheduledFor: visit.scheduledFor,
   status: visit.status,
+  paymentStatus: visit.paymentStatus,
   notes: visit.notes,
   headingThereAt: visit.headingThereAt,
   doneAt: visit.doneAt,
@@ -243,15 +248,25 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     res.status(400).json({ status: 'invalid', message: 'missing visit id' });
     return;
   }
+  // Optional on-the-spot discount (cents) the operator entered in /ops.
+  const discountCents = Number.isFinite(req.body?.discount_cents)
+    ? Math.max(0, Math.trunc(req.body.discount_cents))
+    : 0;
+
   try {
     const db = getDb();
     const [row] = await db
       .select({
         status: visit.status,
         scheduledFor: visit.scheduledFor,
+        paymentStatus: visit.paymentStatus,
+        visitBinCount: visit.binCount,
+        subId: visit.subscriptionId,
         customerId: visit.customerId,
         email: customer.email,
         name: customer.name,
+        stripeCustomerId: customer.stripeCustomerId,
+        defaultPaymentMethodId: customer.defaultPaymentMethodId,
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
@@ -283,6 +298,67 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
 
     await db.update(visit).set({ status: 'done', doneAt: new Date() }).where(eq(visit.id, visitId));
 
+    // ── Charge the card on file (best-effort) ───────────────────────────────
+    // Only charge once per visit (skip if already charged/comped) and only when
+    // the customer has a saved card. A charge failure flags the visit but NEVER
+    // blocks marking the clean done. Resolve cadence for pricing: a visit with a
+    // subscription bills at that cadence; a one-off (subId null) at the one-off
+    // rate.
+    let charge: { attempted: boolean; ok: boolean; amount_cents?: number; error?: string } = {
+      attempted: false,
+      ok: false,
+    };
+    const alreadyBilled = row.paymentStatus === 'charged' || row.paymentStatus === 'comped';
+    if (!alreadyBilled && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
+      let cadence: Cadence | null = null;
+      let binCount = row.visitBinCount ?? 1;
+      if (row.subId) {
+        const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
+        cadence = (sub?.cadence as Cadence) ?? null;
+        binCount = sub?.binCount ?? binCount;
+      }
+      const base = baseChargeCents(cadence, binCount);
+      const amount = finalChargeCents(base, discountCents);
+
+      if (amount <= 0) {
+        // Fully discounted → comp it, no Stripe call.
+        await db.update(visit).set({ paymentStatus: 'comped' }).where(eq(visit.id, visitId));
+        await db.insert(payment).values({
+          id: crypto.randomUUID(),
+          customerId: row.customerId,
+          visitId,
+          amountCents: 0,
+          discountCents,
+          status: 'succeeded',
+        });
+        charge = { attempted: true, ok: true, amount_cents: 0 };
+      } else {
+        charge.attempted = true;
+        const result = await chargeOffSession({
+          stripeCustomerId: row.stripeCustomerId,
+          paymentMethodId: row.defaultPaymentMethodId,
+          amountCents: amount,
+          description: `Lucky Shamrock clean — ${row.scheduledFor.toISOString().slice(0, 10)}`,
+          idempotencyKey: `visit-${visitId}-charge`,
+        });
+        await db.insert(payment).values({
+          id: crypto.randomUUID(),
+          customerId: row.customerId,
+          visitId,
+          stripePaymentIntentId: result.paymentIntentId ?? null,
+          amountCents: amount,
+          discountCents,
+          status: result.ok ? 'succeeded' : 'failed',
+          failureReason: result.ok ? null : (result.error ?? 'charge_failed'),
+        });
+        await db
+          .update(visit)
+          .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
+          .where(eq(visit.id, visitId));
+        charge = { attempted: true, ok: result.ok, amount_cents: amount, error: result.ok ? undefined : result.error };
+      }
+    }
+
     // Idempotent on (visitId, 'done').
     const tpl = doneTemplate({ name: row.name, nextVisitDate, reviewUrl: process.env.REVIEW_URL || null });
     const result = await sendAndLog({
@@ -295,7 +371,12 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       visitId,
     });
 
-    res.status(200).json({ status: 'ok', next_visit_date: nextVisitDate, skipped: result.skipped ?? false });
+    res.status(200).json({
+      status: 'ok',
+      next_visit_date: nextVisitDate,
+      skipped: result.skipped ?? false,
+      charge,
+    });
   } catch (err) {
     console.error('[operator/visit/done] failed', err);
     const message = err instanceof Error ? err.message : 'unknown_error';

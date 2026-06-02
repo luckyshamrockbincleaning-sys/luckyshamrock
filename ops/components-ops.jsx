@@ -74,12 +74,26 @@ function PasswordGate({ onAuthed }) {
   );
 }
 
+const PAY_BADGE = {
+  charged: { label: '💳 paid', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  failed: { label: '⚠ card failed', color: '#7A2222', bg: '#F5DADA' },
+  comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
+};
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
   const isSkipped = stop.status === 'skipped';
   const heading = stop.status === 'heading_there';
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
+  const [discount, setDiscount] = useState('');
+  const pay = PAY_BADGE[stop.payment_status];
+
+  function doneWithDiscount() {
+    const dollars = parseFloat(discount);
+    const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+    onAction('done', stop, { discount_cents });
+  }
 
   return (
     <div className="ops-card">
@@ -89,7 +103,12 @@ function StopCard({ stop, onAction, busy, showDate }) {
           <div className="ops-name">{stop.customer_name}</div>
           <div className="ops-addr">{stop.street}, {stop.city} {stop.postal_code}</div>
         </div>
-        <span className={`visit-status ${stop.status}`}>{stop.status.replace('_', ' ')}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <span className={`visit-status ${stop.status}`}>{stop.status.replace('_', ' ')}</span>
+          {pay && (
+            <span className="visit-status" style={{ background: pay.bg, color: pay.color }}>{pay.label}</span>
+          )}
+        </div>
       </div>
 
       <div className="ops-meta">
@@ -99,6 +118,18 @@ function StopCard({ stop, onAction, busy, showDate }) {
 
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
 
+      {!isDone && !isCancelled && (
+        <div className="ops-discount" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+          <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Discount&nbsp;$</label>
+          <input
+            type="number" min="0" step="1" inputMode="decimal" placeholder="0"
+            value={discount} onChange={(e) => setDiscount(e.target.value)}
+            style={{ width: 80, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15 }}
+          />
+          <span style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>applied when you tap Done</span>
+        </div>
+      )}
+
       <div className="ops-actions">
         {!isDone && !isCancelled && (
           <button className="btn btn-primary ops-btn" disabled={busy} onClick={() => onAction('notify', stop)}>
@@ -106,7 +137,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
           </button>
         )}
         {!isDone && !isCancelled && (
-          <button className="btn btn-go ops-btn" disabled={busy} onClick={() => onAction('done', stop)}>Done</button>
+          <button className="btn btn-go ops-btn" disabled={busy} onClick={doneWithDiscount}>Done</button>
         )}
         {!isDone && !isCancelled && !isSkipped && (
           <button className="btn btn-skip ops-btn" disabled={busy} onClick={() => onAction('skip', stop)}>Skip</button>
@@ -148,7 +179,7 @@ function OpsApp() {
     load(view);
   }, [load, view]);
 
-  async function onAction(action, stop) {
+  async function onAction(action, stop, opts = {}) {
     setBusy(true);
     setFlash({ kind: '', text: '' });
     try {
@@ -162,6 +193,9 @@ function OpsApp() {
           return;
         }
         body.text = text.trim();
+      }
+      if (action === 'done' && opts.discount_cents > 0) {
+        body.discount_cents = opts.discount_cents;
       }
 
       const r = await fetch('/api/operator/act', {
@@ -180,7 +214,14 @@ function OpsApp() {
       if (action === 'notify') {
         setFlash({ kind: 'ok', text: j.skipped ? `${stop.customer_name} was already notified.` : `Notified ${stop.customer_name}.` });
       } else if (action === 'done') {
-        setFlash({ kind: 'ok', text: j.next_visit_date ? `Done — next clean ${formatDate(j.next_visit_date)}.` : 'Done — no more scheduled cleans.' });
+        // Surface the charge outcome alongside the "done" confirmation.
+        let chargeNote = '';
+        const c = j.charge;
+        if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
+        else if (c?.attempted && c.ok && c.amount_cents === 0) chargeNote = ' Comped.';
+        else if (c?.attempted && !c.ok) chargeNote = ' ⚠ Card declined — collect another way.';
+        const next = j.next_visit_date ? `next clean ${formatDate(j.next_visit_date)}.` : 'no more scheduled cleans.';
+        setFlash({ kind: c?.attempted && !c.ok ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
       } else if (action === 'skip') {
         setFlash({ kind: 'ok', text: `Skipped ${stop.customer_name}.` });
       } else if (action === 'note') {
