@@ -52,6 +52,22 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'day_before',
 ]);
 
+// Per-visit billing state (Phase 6 — Stripe).
+export const paymentStatusEnum = pgEnum('payment_status', [
+  'unpaid', // not yet charged
+  'charged', // successfully charged
+  'comped', // intentionally not charged (full discount / freebie)
+  'failed', // charge attempted and declined — needs retry / another method
+]);
+
+// Lifecycle of a single payment attempt (Phase 6 — Stripe).
+export const paymentRecordStatusEnum = pgEnum('payment_record_status', [
+  'pending',
+  'succeeded',
+  'failed',
+  'refunded',
+]);
+
 // ─────────────────────────────────────────────────────────────────────
 // Tables
 // ─────────────────────────────────────────────────────────────────────
@@ -68,6 +84,9 @@ export const customer = pgTable(
     postalCode: varchar('postal_code', { length: 10 }).notNull(),
     pickupDay: pickupDayEnum('pickup_day').notNull(),
     notes: text('notes'),
+    // Stripe billing identifiers (Phase 6). Null until the customer saves a card.
+    stripeCustomerId: text('stripe_customer_id'),
+    defaultPaymentMethodId: text('default_payment_method_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -113,6 +132,8 @@ export const visit = pgTable(
     headingThereAt: timestamp('heading_there_at', { withTimezone: true }),
     doneAt: timestamp('done_at', { withTimezone: true }),
     notes: text('notes'),
+    // Billing state for this visit (Phase 6). Default unpaid until charged on Done.
+    paymentStatus: paymentStatusEnum('payment_status').notNull().default('unpaid'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -166,3 +187,32 @@ export const waitlist = pgTable('waitlist', {
   postalCode: varchar('postal_code', { length: 10 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// One row per charge attempt against a visit (Phase 6 — Stripe). Amounts are in
+// cents. We bill per-visit (not via Stripe Subscriptions) so skips, seasonal
+// scheduling, and on-the-spot discounts stay under our control. The Stripe
+// webhook is the source of truth for status transitions.
+export const payment = pgTable(
+  'payment',
+  {
+    id: uuid('id').primaryKey(),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customer.id, { onDelete: 'restrict' }),
+    visitId: uuid('visit_id').references(() => visit.id, { onDelete: 'set null' }),
+    stripePaymentIntentId: text('stripe_payment_intent_id'),
+    amountCents: integer('amount_cents').notNull(),
+    discountCents: integer('discount_cents').notNull().default(0),
+    currency: varchar('currency', { length: 3 }).notNull().default('cad'),
+    status: paymentRecordStatusEnum('status').notNull().default('pending'),
+    failureReason: text('failure_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    customerIdx: index('payment_customer_idx').on(t.customerId),
+    visitIdx: index('payment_visit_idx').on(t.visitId),
+    // A given PaymentIntent maps to exactly one payment row (idempotent webhooks).
+    intentUnique: unique('payment_intent_unique').on(t.stripePaymentIntentId),
+  }),
+);
