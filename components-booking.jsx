@@ -259,7 +259,8 @@ const Booking = ({ tweaks }) => {
                       key={i}
                       className={`booking-step-pill ${step === n ? 'active' : step > n ? 'done' : ''}`}
                     >
-                      {n}. {label}
+                      <span className="bsp-num">{n}</span>
+                      <span className="bsp-label">{label}</span>
                     </div>
                   );
                 })}
