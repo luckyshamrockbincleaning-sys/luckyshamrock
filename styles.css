@@ -594,6 +594,32 @@ footer::before { background: var(--green-darker); }
 .how-step h3 { margin-bottom: 10px; }
 .how-step p { color: var(--ink-2); font-size: 15px; line-height: 1.55; }
 
+/* Three-step badge: a big shamrock with the step number set into its leaves
+   (no circle). Distinct from .how-step-num, which the "germs" section reuses. */
+.how-step-clover {
+  position: absolute;
+  top: -34px; left: 20px;
+  width: 64px; height: 64px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.how-step-clover .clover-glyph {
+  font-size: 60px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, 0.22));
+}
+.how-step-clover .clover-num {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -62%); /* sit in the leaf cluster, above the stem */
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
 @media (max-width: 880px) {
   .how-steps { grid-template-columns: 1fr; }
 }
@@ -1215,4 +1241,31 @@ footer {
   border-radius: var(--r-pill);
   font-size: 13px;
   color: rgba(255,248,232,0.85);
+}
+
+/* ---------- Mobile polish ---------- */
+
+/* The booking grid was the only section grid missing a single-column
+   collapse, so its card (and the whole Schedule step) overflowed off the
+   right edge on phones. Match the other section grids. */
+@media (max-width: 880px) {
+  .booking-grid { grid-template-columns: 1fr; }
+}
+
+/* Phone-width: keep the sticky header from overflowing. The 240px logo +
+   phone pill + Book button can't fit ~390px, so shrink the logo, collapse
+   the phone to an icon-only button, and tighten the Book button. */
+@media (max-width: 560px) {
+  .container { padding: 0 20px; }
+  .nav-inner { padding: 10px 16px; }
+  .brand-mark { width: 132px; height: 132px; margin-bottom: -30px; }
+  .nav-phone-text { display: none; }
+  .nav-phone { padding: 12px; }
+  .nav-cta { gap: 8px; }
+  .nav-cta .btn-primary { padding: 11px 16px; font-size: 14px; }
+  .booking-card { padding: 24px 20px; }
+  /* Footer's two-column layout clipped the right column (email/hours/socials)
+     off the right edge on phones — stack to one column. */
+  .footer-grid { grid-template-columns: 1fr; gap: 28px; }
+  .footer-col a, .footer-contact a, .footer-contact { word-break: break-word; }
 }

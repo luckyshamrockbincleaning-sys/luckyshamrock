@@ -118,7 +118,10 @@ const HowItWorks = ({ onBookClick }) => {
         <div className="how-steps">
           {steps.map((s, i) => (
             <div className="how-step" key={i}>
-              <div className="how-step-num" aria-label={`Step ${i + 1}`} style={{fontSize: 26, lineHeight: 1}}>🍀</div>
+              <div className="how-step-clover" aria-label={`Step ${i + 1}`}>
+                <span className="clover-glyph">🍀</span>
+                <span className="clover-num">{i + 1}</span>
+              </div>
               <div className="how-step-icon">{s.icon}</div>
               <h3>{s.title}</h3>
               <p>{s.body}</p>

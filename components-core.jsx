@@ -149,9 +149,9 @@ const Nav = ({ tweaks, onBookClick }) => (
         <a href="#faq">FAQ</a>
       </div>
       <div className="nav-cta">
-        <a href={`tel:${tweaks.phone}`} className="btn btn-ghost">
+        <a href={`tel:${tweaks.phone}`} className="btn btn-ghost nav-phone" aria-label={`Call ${tweaks.phone}`}>
           <Icon.Phone size={14}/>
-          <span style={{display: 'inline-block'}}>{tweaks.phone}</span>
+          <span className="nav-phone-text">{tweaks.phone}</span>
         </a>
         <button className="btn btn-primary" onClick={onBookClick}>
           Book a clean
