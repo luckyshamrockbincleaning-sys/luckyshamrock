@@ -9,7 +9,7 @@ const PALETTES = {
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "city": "Fort Saskatchewan",
-  "phone": "(555) 010-2580",
+  "phone": "(587) 982-8887",
   "startingPrice": 22,
   "palette": "shamrock"
 }/*EDITMODE-END*/;
