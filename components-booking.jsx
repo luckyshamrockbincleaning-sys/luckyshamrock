@@ -162,10 +162,11 @@ const Booking = ({ tweaks }) => {
 
   const selectedService = services.find(s => s.id === service);
   // Per-clean price, charged AFTER each clean — mirrors lib/pricing.ts
-  // (monthly $35, one-off $45, Three Wash Season $35/wash). Nothing is charged
-  // at booking: the card is saved now, then charged once the bin is clean.
+  // (monthly $35, one-off $45, Three Wash Season $35/wash for the first bin,
+  // plus $12/clean per extra bin). Nothing is charged at booking: the card is
+  // saved now, then charged once the bin is clean.
   const PER_CLEAN_PRICE = { 'one-time': 45, 'monthly': 35, 'three-wash': 35 };
-  const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) * bins;
+  const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) + Math.max(0, bins - 1) * 12;
 
   // One-off → the explicitly chosen calendar date; seasonal → next Apr/Jul/Sep
   // wash; other recurring → first clean derived from pickup day.
@@ -405,6 +406,11 @@ const Booking = ({ tweaks }) => {
                   <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
                     <span>Card saved before confirmation — charged only after each clean.</span>
                   </div>
+                  {bins > 1 && (
+                    <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
+                      <span>Extra bins are $12 each per clean.</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="booking-nav">

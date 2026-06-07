@@ -105,6 +105,17 @@ describe('operator Done — auto-charge', () => {
     expect(pays[0]!.amountCents).toBe(3500);
   });
 
+  it('charges extra bins at $12 each instead of full plan price', async () => {
+    mockCharge.mockResolvedValueOnce({ ok: true, paymentIntentId: 'pi_extra', status: 'succeeded' });
+    await seed({ withCard: true, cadence: 'monthly', binCount: 3 });
+    const res = mockRes();
+    await handler(await req(), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockCharge).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 5900 }));
+    expect(res.body.charge).toMatchObject({ attempted: true, ok: true, amount_cents: 5900 });
+  });
+
   it('applies an on-the-spot discount before charging', async () => {
     mockCharge.mockResolvedValueOnce({ ok: true, paymentIntentId: 'pi_disc', status: 'succeeded' });
     await seed({ withCard: true, cadence: 'monthly', binCount: 1 });

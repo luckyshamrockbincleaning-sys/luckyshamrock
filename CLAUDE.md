@@ -173,8 +173,9 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   (Stripe Customer + SetupIntent), charged on the operator **Done** tap
   (off-session PaymentIntent). Keeps skip/seasonal/discount logic ours.
 - **Prices are server-side only** (`lib/pricing.ts`, in cents). NEVER trust a
-  client-sent amount. Discount comes from the operator (`discount_cents` on the
-  `done` op), clamped to `[0, base]`.
+  client-sent amount. First bin uses the plan price; each extra bin is
+  `$12/clean`. Discount comes from the operator (`discount_cents` on the `done`
+  op), clamped to `[0, base]`.
 - **A charge failure never blocks "Done."** Declined card → `visit.payment_status
   = 'failed'` + a flagged `payment` row; the clean still completes. Full discount
   → `comped` (no Stripe call).
