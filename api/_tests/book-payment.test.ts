@@ -152,6 +152,57 @@ describe('POST /api/book payment setup', () => {
     expect(billingMocks.createBookingSetupIntent).not.toHaveBeenCalled();
   });
 
+  it('rejects payment setup when any subscription for the email is active', async () => {
+    const db = getDb();
+    const customerId = crypto.randomUUID();
+    await db.insert(customer).values({
+      id: customerId,
+      email: 'sam-pay@example.com',
+      name: 'Sam Customer',
+      phone: '780-555-0100',
+      street: '123 Main St',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L 1A1',
+      pickupDay: 'wednesday',
+    });
+    await db.insert(subscription).values([
+      {
+        id: crypto.randomUUID(),
+        customerId,
+        cadence: 'monthly',
+        binCount: 1,
+        status: 'cancelled',
+        startedOn: new Date('2026-05-01T12:00:00Z'),
+        cancelledAt: new Date('2026-05-10T12:00:00Z'),
+      },
+      {
+        id: crypto.randomUUID(),
+        customerId,
+        cadence: 'seasonal',
+        binCount: 2,
+        status: 'active',
+        startedOn: new Date('2026-06-01T12:00:00Z'),
+      },
+    ]);
+
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: {
+        intent: 'payment_setup',
+        name: 'Sam Customer',
+        email: 'sam-pay@example.com',
+        phone: '780-555-0100',
+        postal_code: 'T8L 1A1',
+      },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ status: 'already_subscribed' });
+    expect(billingMocks.createBookingSetupIntent).not.toHaveBeenCalled();
+  });
+
   it('requires payment setup before final booking when Stripe is configured', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',
@@ -195,5 +246,66 @@ describe('POST /api/book payment setup', () => {
 
     const visits = await db.select().from(visit).where(eq(visit.customerId, c!.id));
     expect(visits).toHaveLength(1);
+  });
+
+  it('refreshes stale existing customer details when booking a new plan', async () => {
+    const db = getDb();
+    const existingCustomerId = crypto.randomUUID();
+    await db.insert(customer).values({
+      id: existingCustomerId,
+      email: 'sam-pay@example.com',
+      name: 'Old Name',
+      phone: '780-555-0000',
+      street: '14 Clover Lane',
+      city: 'Spruce Grove',
+      postalCode: 'T8L0A1',
+      pickupDay: 'monday',
+      stripeCustomerId: 'cus_old',
+      defaultPaymentMethodId: 'pm_old',
+    });
+    billingMocks.getSavedPaymentMethodFromSetupIntent.mockResolvedValueOnce('pm_new');
+
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: {
+        ...validBody,
+        name: 'New Booking Name',
+        phone: '780-555-9999',
+        street: '999 New Street',
+        city: 'Fort Saskatchewan',
+        postal_code: 'T8L 9Z9',
+        pickup_day: 'wednesday',
+        plan: 'monthly',
+        payment_setup: {
+          stripe_customer_id: 'cus_new',
+          setup_intent_id: 'seti_new',
+        },
+      },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ status: 'ok', customer_id: existingCustomerId });
+
+    const [c] = await db.select().from(customer).where(eq(customer.email, 'sam-pay@example.com'));
+    expect(c).toMatchObject({
+      id: existingCustomerId,
+      name: 'New Booking Name',
+      phone: '780-555-9999',
+      street: '999 New Street',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L9Z9',
+      pickupDay: 'wednesday',
+      stripeCustomerId: 'cus_new',
+      defaultPaymentMethodId: 'pm_new',
+    });
+
+    const subs = await db.select().from(subscription).where(eq(subscription.customerId, existingCustomerId));
+    expect(subs).toHaveLength(1);
+    expect(subs[0]!).toMatchObject({ cadence: 'monthly', binCount: 2, status: 'active' });
+
+    const visits = await db.select().from(visit).where(eq(visit.customerId, existingCustomerId));
+    expect(visits).toHaveLength(12);
   });
 });

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
@@ -84,10 +84,11 @@ export default async function handler(
         .where(eq(customer.email, setupParsed.data.email));
       if (existing) {
         const [activeSub] = await db
-          .select()
+          .select({ id: subscription.id })
           .from(subscription)
-          .where(eq(subscription.customerId, existing.id));
-        if (activeSub && activeSub.status === 'active') {
+          .where(and(eq(subscription.customerId, existing.id), eq(subscription.status, 'active')))
+          .limit(1);
+        if (activeSub) {
           res.status(409).json({
             status: 'already_subscribed',
             message: 'This email is already on an active plan. Check your inbox for the manage link or visit /manage.',
@@ -152,10 +153,11 @@ export default async function handler(
     if (existing) {
       // A customer with an active subscription can't re-book a plan.
       const [activeSub] = await db
-        .select()
+        .select({ id: subscription.id })
         .from(subscription)
-        .where(eq(subscription.customerId, existing.id));
-      if (activeSub && activeSub.status === 'active') {
+        .where(and(eq(subscription.customerId, existing.id), eq(subscription.status, 'active')))
+        .limit(1);
+      if (activeSub) {
         res.status(409).json({
           status: 'already_subscribed',
           message: 'This email is already on an active plan. Check your inbox for the manage link or visit /manage.',
@@ -247,12 +249,22 @@ export default async function handler(
           stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
           defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
         });
-      } else if (verifiedPaymentSetup) {
+      } else {
         await tx
           .update(customer)
           .set({
-            stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
-            defaultPaymentMethodId: verifiedPaymentSetup.paymentMethodId,
+            name: data.name,
+            phone: data.phone ?? null,
+            street: data.street,
+            city: data.city,
+            postalCode: normalizePostalCode(data.postal_code),
+            pickupDay: data.pickup_day,
+            ...(verifiedPaymentSetup
+              ? {
+                  stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
+                  defaultPaymentMethodId: verifiedPaymentSetup.paymentMethodId,
+                }
+              : {}),
           })
           .where(eq(customer.id, customerId));
       }

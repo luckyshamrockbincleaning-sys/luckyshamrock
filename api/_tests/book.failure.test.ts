@@ -5,6 +5,7 @@ const mockSelect = vi.fn();
 const mockInsert = vi.fn();
 const mockFrom = vi.fn(() => ({ where: mockWhere }));
 const mockWhere = vi.fn();
+const mockLimit = vi.fn();
 const mockValues = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('../../db/client.js', () => ({
@@ -40,6 +41,7 @@ describe('POST /api/book — failure modes', () => {
     errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     mockWhere.mockReset();
+    mockLimit.mockReset();
     mockValues.mockClear();
   });
 
@@ -83,7 +85,8 @@ describe('POST /api/book — failure modes', () => {
       { id: 'existing-cust-id', email: 'sam@example.com' },
     ]);
     // Second lookup: active sub
-    mockWhere.mockResolvedValueOnce([{ id: 'sub-id', status: 'active' }]);
+    mockWhere.mockReturnValueOnce({ limit: mockLimit });
+    mockLimit.mockResolvedValueOnce([{ id: 'sub-id' }]);
 
     const req = mockReq<typeof handler>({
       method: 'POST',
