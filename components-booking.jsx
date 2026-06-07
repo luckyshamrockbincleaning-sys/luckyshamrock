@@ -1,5 +1,5 @@
 /* global React, Icon */
-const { useState: useStateBk, useMemo } = React;
+const { useState: useStateBk, useMemo, useRef } = React;
 
 // Map UI service id → API plan value
 const SERVICE_TO_PLAN = {
@@ -97,6 +97,21 @@ function fmtNice(d) {
   return d ? d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }) : '—';
 }
 
+let _bookingStripeJsPromise = null;
+function loadBookingStripeJs() {
+  if (window.Stripe) return Promise.resolve(window.Stripe);
+  if (!_bookingStripeJsPromise) {
+    _bookingStripeJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://js.stripe.com/v3/';
+      s.onload = () => resolve(window.Stripe);
+      s.onerror = () => reject(new Error('Failed to load secure card form.'));
+      document.head.appendChild(s);
+    });
+  }
+  return _bookingStripeJsPromise;
+}
+
 // ===== Booking flow =====
 const Booking = ({ tweaks }) => {
   const [step, setStep] = useStateBk(1);
@@ -113,6 +128,10 @@ const Booking = ({ tweaks }) => {
     pickupDay: '',
   });
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
+  const [paymentState, setPaymentState] = useStateBk({ phase: 'idle' });
+  const stripeRef = useRef(null);
+  const elementsRef = useRef(null);
+  const paymentSetupRef = useRef(null);
 
   const services = [
     { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: 45 },
@@ -143,9 +162,8 @@ const Booking = ({ tweaks }) => {
 
   const selectedService = services.find(s => s.id === service);
   // Per-clean price, charged AFTER each clean — mirrors lib/pricing.ts
-  // (monthly $35, one-off $45, Three Wash Season $35/wash). Nothing is taken at
-  // booking: we don't collect a card here and nothing is due today. The card is
-  // saved later on /manage, then charged once the bin is actually clean.
+  // (monthly $35, one-off $45, Three Wash Season $35/wash). Nothing is charged
+  // at booking: the card is saved now, then charged once the bin is clean.
   const PER_CLEAN_PRICE = { 'one-time': 45, 'monthly': 35, 'three-wash': 35 };
   const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) * bins;
 
@@ -161,10 +179,77 @@ const Booking = ({ tweaks }) => {
     1: !!service,
     2: isOneoff ? selectedDay !== null : !!contact.pickupDay,
     3: contact.name && contact.email && contact.phone && contact.street && contact.postalCode,
-    4: true
+    4: paymentState.phase === 'saved',
+    5: true
   };
 
   const monthName = days[14]?.date?.toLocaleString('en', { month: 'long', year: 'numeric' });
+
+  function updateContact(next) {
+    setContact(next);
+    if (paymentState.phase !== 'idle') {
+      setPaymentState({ phase: 'idle' });
+      stripeRef.current = null;
+      elementsRef.current = null;
+      paymentSetupRef.current = null;
+    }
+  }
+
+  async function startPaymentSetup() {
+    setPaymentState({ phase: 'loading' });
+    try {
+      const response = await fetch('/api/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intent: 'payment_setup',
+          name: contact.name,
+          email: contact.email,
+          phone: contact.phone || undefined,
+          postal_code: contact.postalCode,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.status !== 'ok') {
+        throw new Error(data.message || 'Card setup is unavailable right now.');
+      }
+
+      const Stripe = await loadBookingStripeJs();
+      const stripe = Stripe(data.publishable_key);
+      const elements = stripe.elements({ clientSecret: data.client_secret });
+      const paymentEl = elements.create('payment');
+
+      stripeRef.current = stripe;
+      elementsRef.current = elements;
+      paymentSetupRef.current = {
+        stripe_customer_id: data.stripe_customer_id,
+        setup_intent_id: data.setup_intent_id,
+      };
+      setPaymentState({ phase: 'ready' });
+      setTimeout(() => {
+        const mountPoint = document.getElementById('booking-card-element');
+        if (mountPoint) paymentEl.mount('#booking-card-element');
+      }, 0);
+    } catch (err) {
+      setPaymentState({ phase: 'error', message: err.message || 'Could not load secure card form.' });
+    }
+  }
+
+  async function savePaymentMethod() {
+    if (!stripeRef.current || !elementsRef.current) return;
+    setPaymentState({ phase: 'saving' });
+    try {
+      const { error } = await stripeRef.current.confirmSetup({
+        elements: elementsRef.current,
+        confirmParams: { return_url: window.location.href },
+        redirect: 'if_required',
+      });
+      if (error) throw new Error(error.message || 'Could not save this card.');
+      setPaymentState({ phase: 'saved' });
+    } catch (err) {
+      setPaymentState({ phase: 'ready', message: err.message || 'Could not save this card.' });
+    }
+  }
 
   // ===== Submit to /api/book =====
   async function submitBooking() {
@@ -195,6 +280,7 @@ const Booking = ({ tweaks }) => {
       bin_count: bins,
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
+      ...(paymentSetupRef.current ? { payment_setup: paymentSetupRef.current } : {}),
     };
 
     try {
@@ -253,9 +339,9 @@ const Booking = ({ tweaks }) => {
           </div>
 
           <div className="booking-card">
-            {step < 4 && (
+            {step < 5 && (
               <div className="booking-steps">
-                {['Service', 'Schedule', 'Your Info', 'Confirm'].map((label, i) => {
+                {['Service', 'Schedule', 'Your Info', 'Payment', 'Confirm'].map((label, i) => {
                   const n = i + 1;
                   return (
                     <div
@@ -317,7 +403,7 @@ const Booking = ({ tweaks }) => {
                     <span>$0</span>
                   </div>
                   <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
-                    <span>No card needed now — you're only charged after each clean.</span>
+                    <span>Card saved before confirmation — charged only after each clean.</span>
                   </div>
                 </div>
 
@@ -437,7 +523,7 @@ const Booking = ({ tweaks }) => {
                     type="text"
                     placeholder="Maeve O'Sullivan"
                     value={contact.name}
-                    onChange={e => setContact({...contact, name: e.target.value})}
+                    onChange={e => updateContact({...contact, name: e.target.value})}
                   />
                 </div>
                 <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12}}>
@@ -447,7 +533,7 @@ const Booking = ({ tweaks }) => {
                       type="email"
                       placeholder="you@you.com"
                       value={contact.email}
-                      onChange={e => setContact({...contact, email: e.target.value})}
+                      onChange={e => updateContact({...contact, email: e.target.value})}
                     />
                   </div>
                   <div className="field">
@@ -456,7 +542,7 @@ const Booking = ({ tweaks }) => {
                       type="tel"
                       placeholder="(555) 010-2580"
                       value={contact.phone}
-                      onChange={e => setContact({...contact, phone: e.target.value})}
+                      onChange={e => updateContact({...contact, phone: e.target.value})}
                     />
                   </div>
                 </div>
@@ -466,7 +552,7 @@ const Booking = ({ tweaks }) => {
                     type="text"
                     placeholder="14 Clover Lane"
                     value={contact.street}
-                    onChange={e => setContact({...contact, street: e.target.value})}
+                    onChange={e => updateContact({...contact, street: e.target.value})}
                   />
                 </div>
                 <div style={{display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12}}>
@@ -476,7 +562,7 @@ const Booking = ({ tweaks }) => {
                       type="text"
                       placeholder="Fort Saskatchewan"
                       value={contact.city}
-                      onChange={e => setContact({...contact, city: e.target.value})}
+                      onChange={e => updateContact({...contact, city: e.target.value})}
                     />
                   </div>
                   <div className="field">
@@ -485,7 +571,7 @@ const Booking = ({ tweaks }) => {
                       type="text"
                       placeholder="T8L 0A1"
                       value={contact.postalCode}
-                      onChange={e => setContact({...contact, postalCode: e.target.value.toUpperCase()})}
+                      onChange={e => updateContact({...contact, postalCode: e.target.value.toUpperCase()})}
                     />
                   </div>
                 </div>
@@ -503,8 +589,78 @@ const Booking = ({ tweaks }) => {
                   <button className="btn btn-cream" onClick={() => setStep(2)}>Back</button>
                   <button
                     className="btn btn-primary"
-                    onClick={() => { setSubmitState({ phase: 'idle' }); setStep(4); }}
+                    onClick={() => setStep(4)}
                     disabled={!canAdvance[3]}
+                  >
+                    Continue to payment <Icon.Arrow size={16}/>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === 4 && (
+              <div>
+                <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 18, marginBottom: 8}}>
+                  Save your payment method
+                </div>
+                <p style={{fontSize: 13, color: 'var(--ink-3)', marginBottom: 16}}>
+                  We save your card now so your booking is complete. Nothing is charged today — your card is charged only after your bin is clean.
+                </p>
+
+                {paymentState.phase === 'idle' && (
+                  <button className="btn btn-primary" onClick={startPaymentSetup} style={{width: '100%'}}>
+                    Set up secure payment <Icon.Arrow size={16}/>
+                  </button>
+                )}
+
+                {paymentState.phase === 'loading' && (
+                  <div className="booking-loading" style={{marginTop: 18, textAlign: 'center', color: 'var(--ink-3)'}}>
+                    Loading secure card form…
+                  </div>
+                )}
+
+                {(paymentState.phase === 'ready' || paymentState.phase === 'saving') && (
+                  <div>
+                    <div id="booking-card-element" style={{padding: 14, border: '1px solid var(--line)', borderRadius: 12, background: 'white'}} />
+                    {paymentState.message && (
+                      <div className="booking-error" style={{marginTop: 12}}>
+                        <p>{paymentState.message}</p>
+                      </div>
+                    )}
+                    <button
+                      className="btn btn-primary"
+                      onClick={savePaymentMethod}
+                      disabled={paymentState.phase === 'saving'}
+                      style={{width: '100%', marginTop: 14}}
+                    >
+                      {paymentState.phase === 'saving' ? 'Saving…' : 'Save card'}
+                    </button>
+                  </div>
+                )}
+
+                {paymentState.phase === 'saved' && (
+                  <div className="booking-success" style={{marginTop: 18}}>
+                    <div className="check-big">
+                      <Icon.Check size={32} color="white"/>
+                    </div>
+                    <h3>Card saved. No charge today.</h3>
+                    <p>You're ready to confirm the booking.</p>
+                  </div>
+                )}
+
+                {paymentState.phase === 'error' && (
+                  <div className="booking-error" style={{marginTop: 18}}>
+                    <p>{paymentState.message}</p>
+                    <button className="btn btn-primary" onClick={startPaymentSetup} style={{marginTop: 12}}>Try again</button>
+                  </div>
+                )}
+
+                <div className="booking-nav" style={{marginTop: 24}}>
+                  <button className="btn btn-cream" onClick={() => setStep(3)}>Back</button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => { setSubmitState({ phase: 'idle' }); setStep(5); }}
+                    disabled={!canAdvance[4]}
                   >
                     Review & confirm <Icon.Arrow size={16}/>
                   </button>
@@ -512,7 +668,7 @@ const Booking = ({ tweaks }) => {
               </div>
             )}
 
-            {step === 4 && (
+            {step === 5 && (
               <div>
                 {/* Summary always shown on confirm step */}
                 <div style={{fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 18, marginBottom: 14}}>
@@ -547,7 +703,7 @@ const Booking = ({ tweaks }) => {
                 {/* Branch on submitState.phase */}
                 {submitState.phase === 'idle' && (
                   <div className="booking-nav">
-                    <button className="btn btn-cream" onClick={() => setStep(3)}>Back</button>
+                    <button className="btn btn-cream" onClick={() => setStep(4)}>Back</button>
                     <button
                       className="btn btn-primary booking-cta"
                       onClick={submitBooking}
@@ -573,7 +729,7 @@ const Booking = ({ tweaks }) => {
                       Your first clean is scheduled for <strong>{submitState.firstVisitDate}</strong>.
                     </p>
                     <p>
-                      Check <strong>{contact.email}</strong> for a link to manage your booking.
+                      Your card is saved and will be charged only after your bin is clean. Check <strong>{contact.email}</strong> for your manage link.
                     </p>
                     <button
                       className="btn btn-cream"

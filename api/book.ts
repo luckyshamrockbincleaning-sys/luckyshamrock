@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
 import { bookRequestSchema } from '../lib/validation.js';
@@ -8,7 +9,12 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
-import { createStripeCustomer } from '../lib/billing.js';
+import {
+  createBookingSetupIntent,
+  createStripeCustomer,
+  getSavedPaymentMethodFromSetupIntent,
+} from '../lib/billing.js';
+import { isStripeConfigured } from '../lib/stripe.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -17,6 +23,14 @@ const RECURRING_COUNT: Record<Cadence, number> = {
   quarterly: 4,
   seasonal: 3, // Three Wash Season — 3 cleans/year (Apr, Jul, Sep)
 };
+
+const paymentSetupRequestSchema = z.object({
+  intent: z.literal('payment_setup'),
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().toLowerCase().email(),
+  phone: z.string().trim().max(40).optional(),
+  postal_code: z.string().trim().min(1).max(10),
+});
 
 /**
  * Format a calendar date ("YYYY-MM-DD") as a friendly human string
@@ -42,6 +56,67 @@ export default async function handler(
 ): Promise<void> {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+
+  if (req.body?.intent === 'payment_setup') {
+    const setupParsed = paymentSetupRequestSchema.safeParse(req.body);
+    if (!setupParsed.success) {
+      res.status(400).json({
+        status: 'invalid',
+        errors: setupParsed.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    try {
+      if (!isInServiceArea(setupParsed.data.postal_code)) {
+        res.status(422).json({
+          status: 'out_of_area',
+          message: "We don't serve your area yet. Join the waitlist and we'll let you know when we do.",
+        });
+        return;
+      }
+
+      const db = getDb();
+      const [existing] = await db
+        .select()
+        .from(customer)
+        .where(eq(customer.email, setupParsed.data.email));
+      if (existing) {
+        const [activeSub] = await db
+          .select()
+          .from(subscription)
+          .where(eq(subscription.customerId, existing.id));
+        if (activeSub && activeSub.status === 'active') {
+          res.status(409).json({
+            status: 'already_subscribed',
+            message: 'This email is already on an active plan. Check your inbox for the manage link or visit /manage.',
+          });
+          return;
+        }
+      }
+
+      const setup = await createBookingSetupIntent({
+        email: setupParsed.data.email,
+        name: setupParsed.data.name,
+        phone: setupParsed.data.phone,
+      });
+      if (!setup) {
+        res.status(503).json({ status: 'billing_unavailable', message: 'Card payments are not set up yet.' });
+        return;
+      }
+      res.status(200).json({
+        status: 'ok',
+        client_secret: setup.clientSecret,
+        publishable_key: setup.publishableKey,
+        stripe_customer_id: setup.stripeCustomerId,
+        setup_intent_id: setup.setupIntentId,
+      });
+    } catch (err) {
+      console.error('[book:payment_setup] failed', err);
+      const message = err instanceof Error ? err.message : 'unknown_error';
+      res.status(500).json({ status: 'error', message });
+    }
     return;
   }
 
@@ -87,6 +162,32 @@ export default async function handler(
         });
         return;
       }
+    }
+
+    let verifiedPaymentSetup: { stripeCustomerId: string; paymentMethodId: string } | null = null;
+    if (isStripeConfigured()) {
+      if (!data.payment_setup) {
+        res.status(400).json({
+          status: 'invalid',
+          errors: { payment_setup: ['Save a card before confirming your booking.'] },
+        });
+        return;
+      }
+      const paymentMethodId = await getSavedPaymentMethodFromSetupIntent(
+        data.payment_setup.setup_intent_id,
+        data.payment_setup.stripe_customer_id,
+      );
+      if (!paymentMethodId) {
+        res.status(400).json({
+          status: 'invalid',
+          errors: { payment_setup: ['Card setup is incomplete. Save a card before confirming your booking.'] },
+        });
+        return;
+      }
+      verifiedPaymentSetup = {
+        stripeCustomerId: data.payment_setup.stripe_customer_id,
+        paymentMethodId,
+      };
     }
 
     const isNewCustomer = !existing;
@@ -143,7 +244,17 @@ export default async function handler(
           city: data.city,
           postalCode: normalizePostalCode(data.postal_code),
           pickupDay: data.pickup_day,
+          stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
+          defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
         });
+      } else if (verifiedPaymentSetup) {
+        await tx
+          .update(customer)
+          .set({
+            stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
+            defaultPaymentMethodId: verifiedPaymentSetup.paymentMethodId,
+          })
+          .where(eq(customer.id, customerId));
       }
       if (subscriptionId) {
         await tx.insert(subscription).values({
@@ -187,11 +298,10 @@ export default async function handler(
       visitId: firstVisitId,
     });
 
-    // Create a Stripe Customer for new customers so a card can be saved later.
-    // OUTSIDE the booking transaction + best-effort: a Stripe hiccup (or no keys)
-    // must never fail a booking. The card itself is collected on the success
-    // screen / /manage via a SetupIntent; this just provisions the customer.
-    if (isNewCustomer) {
+    // If Stripe is not configured, keep the old no-card booking path alive and
+    // best-effort provision a customer for later. When Stripe is configured,
+    // booking requires `verifiedPaymentSetup` and this fallback is skipped.
+    if (isNewCustomer && !verifiedPaymentSetup) {
       try {
         const stripeCustomerId = await createStripeCustomer({
           email: data.email,

@@ -10,6 +10,10 @@ const pickupDay = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday'
 const cadence = z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']);
 const planField = z.enum(['oneoff', 'monthly', 'bimonthly', 'quarterly', 'seasonal']);
 const binCount = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+const paymentSetup = z.object({
+  stripe_customer_id: z.string().trim().min(1),
+  setup_intent_id: z.string().trim().min(1),
+});
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -49,6 +53,7 @@ export const bookRequestSchema = z
     bin_count: binCount,
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
+    payment_setup: paymentSetup.optional(),
   })
   .refine(
     (data) => (data.plan === 'oneoff' ? data.oneoff_date !== undefined : data.oneoff_date === undefined),

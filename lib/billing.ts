@@ -34,6 +34,17 @@ export interface SetupIntentResult {
   publishableKey: string;
 }
 
+export interface BookingSetupIntentInput {
+  email: string;
+  name: string;
+  phone?: string | null;
+}
+
+export interface BookingSetupIntentResult extends SetupIntentResult {
+  stripeCustomerId: string;
+  setupIntentId: string;
+}
+
 /**
  * Create a SetupIntent so the customer can save a card on file (no charge).
  * Returns the client secret + publishable key for Stripe Elements on the
@@ -51,6 +62,46 @@ export async function createSetupIntent(stripeCustomerId: string): Promise<Setup
   });
   if (!si.client_secret) return null;
   return { clientSecret: si.client_secret, publishableKey };
+}
+
+export async function createBookingSetupIntent(
+  input: BookingSetupIntentInput,
+): Promise<BookingSetupIntentResult | null> {
+  if (!isStripeConfigured()) return null;
+  const publishableKey = process.env.STRIPE_PUBLISHABLE_KEY;
+  if (!publishableKey) return null;
+  const stripe = getStripe();
+  const c = await stripe.customers.create({
+    email: input.email,
+    name: input.name,
+    phone: input.phone ?? undefined,
+  });
+  const si = await stripe.setupIntents.create({
+    customer: c.id,
+    payment_method_types: ['card'],
+    usage: 'off_session',
+  });
+  if (!si.id || !si.client_secret) return null;
+  return {
+    stripeCustomerId: c.id,
+    setupIntentId: si.id,
+    clientSecret: si.client_secret,
+    publishableKey,
+  };
+}
+
+export async function getSavedPaymentMethodFromSetupIntent(
+  setupIntentId: string,
+  stripeCustomerId: string,
+): Promise<string | null> {
+  if (!isStripeConfigured()) return null;
+  const stripe = getStripe();
+  const si = await stripe.setupIntents.retrieve(setupIntentId);
+  const customerId = typeof si.customer === 'string' ? si.customer : si.customer?.id;
+  const paymentMethodId = typeof si.payment_method === 'string' ? si.payment_method : si.payment_method?.id;
+  if (si.status !== 'succeeded') return null;
+  if (customerId !== stripeCustomerId) return null;
+  return paymentMethodId ?? null;
 }
 
 export interface ChargeResult {

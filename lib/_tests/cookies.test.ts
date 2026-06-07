@@ -33,7 +33,9 @@ describe('signSessionCookie + verifySessionCookie', () => {
 
   it('returns null for a tampered token', async () => {
     const token = await signSessionCookie('cust-123');
-    const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a');
+    const parts = token.split('.');
+    parts[2] = (parts[2]!.startsWith('a') ? 'b' : 'a') + parts[2]!.slice(1);
+    const tampered = parts.join('.');
     expect(await verifySessionCookie(tampered)).toBeNull();
   });
 

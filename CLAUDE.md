@@ -176,8 +176,10 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   it sets `export const config = { api: { bodyParser: false } }`. It's the ONE
   Stripe function — **we're at 12/12 on Vercel Hobby.** Adding ANY new function
   now fails the build; consolidate or upgrade to Pro first.
-- **Card-setup endpoint is folded into `POST /api/me`** (not its own function) to
-  respect the 12-cap. Manage page's `PaymentCard` loads Stripe.js + Elements.
+- **Card setup is folded into existing functions** to respect the 12-cap.
+  Booking uses `POST /api/book` with `{intent:'payment_setup'}` before final
+  confirmation; `/manage` still uses `POST /api/me` for replacing the saved card.
+  Both load Stripe.js + Elements on the client.
 - **Env:** `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`.
   Use `sk_test_`/`pk_test_` until a deliberate live cutover. Pin the SDK
   `apiVersion` in `lib/stripe.ts` (currently `2026-05-27.dahlia` for stripe@22).
