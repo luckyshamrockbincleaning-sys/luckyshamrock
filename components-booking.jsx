@@ -189,9 +189,9 @@ const Booking = ({ tweaks }) => {
       street: contact.street,
       city: contact.city || 'Fort Saskatchewan',
       postal_code: contact.postalCode,
-      // Recurring schedules are driven by pickup_day; one-offs use oneoff_date,
-      // but the API still requires a valid pickup_day, so default it.
-      pickup_day: contact.pickupDay || 'monday',
+      // Recurring schedules are driven by pickup_day; one-offs use only
+      // oneoff_date, but the API still requires a valid pickup_day.
+      pickup_day: plan === 'oneoff' ? 'monday' : contact.pickupDay,
       bin_count: bins,
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
@@ -489,21 +489,6 @@ const Booking = ({ tweaks }) => {
                     />
                   </div>
                 </div>
-                {isOneoff && (
-                  <div className="field">
-                    <label>Garbage pickup day (we clean the day after)</label>
-                    <select
-                      value={contact.pickupDay || 'monday'}
-                      onChange={e => setContact({...contact, pickupDay: e.target.value})}
-                    >
-                      <option value="monday">Monday</option>
-                      <option value="tuesday">Tuesday</option>
-                      <option value="wednesday">Wednesday</option>
-                      <option value="thursday">Thursday</option>
-                      <option value="friday">Friday</option>
-                    </select>
-                  </div>
-                )}
                 <div className="field">
                   <label>Bin location (so we don't wake the dog)</label>
                   <select defaultValue="side">
