@@ -18,6 +18,24 @@ const RECURRING_COUNT: Record<Cadence, number> = {
   seasonal: 3, // Three Wash Season — 3 cleans/year (Apr, Jul, Sep)
 };
 
+/**
+ * Format a calendar date ("YYYY-MM-DD") as a friendly human string
+ * ("Thu, Jun 11, 2026") for the confirmation email + success screen — matching
+ * how /manage renders visit dates. Built from the date parts via Date.UTC so it
+ * is timezone-independent (no UTC-midnight off-by-one).
+ */
+function formatFriendlyDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-CA', {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
@@ -145,6 +163,7 @@ export default async function handler(
     });
 
     const firstVisitDate = visitDates[0]!.toISOString().slice(0, 10);
+    const firstVisitDateLong = formatFriendlyDate(firstVisitDate);
     const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
     const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(tokenPlain)}`;
 
@@ -156,7 +175,7 @@ export default async function handler(
     // "email me a link" flow, which mints its own fresh token.
     const bookingTemplate = bookingConfirmedTemplate({
       name: data.name,
-      firstVisitDate,
+      firstVisitDate: firstVisitDateLong,
       manageUrl,
     });
     await sendAndLog({
@@ -195,6 +214,7 @@ export default async function handler(
       status: 'ok',
       customer_id: customerId,
       first_visit_date: firstVisitDate,
+      first_visit_date_long: firstVisitDateLong,
     });
   } catch (err) {
     // Postgres unique_violation = SQLSTATE 23505. Drizzle surfaces this in

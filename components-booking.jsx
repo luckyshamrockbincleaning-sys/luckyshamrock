@@ -142,9 +142,12 @@ const Booking = ({ tweaks }) => {
   }, []);
 
   const selectedService = services.find(s => s.id === service);
-  const subtotal = selectedService.price * bins;
-  const firstCleanFee = !isOneoff ? 15 : 0;
-  const total = subtotal + firstCleanFee;
+  // Per-clean price, charged AFTER each clean — mirrors lib/pricing.ts
+  // (monthly $35, one-off $45, Three Wash Season $35/wash). Nothing is taken at
+  // booking: we don't collect a card here and nothing is due today. The card is
+  // saved later on /manage, then charged once the bin is actually clean.
+  const PER_CLEAN_PRICE = { 'one-time': 45, 'monthly': 35, 'three-wash': 35 };
+  const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) * bins;
 
   // One-off → the explicitly chosen calendar date; seasonal → next Apr/Jul/Sep
   // wash; other recurring → first clean derived from pickup day.
@@ -203,7 +206,7 @@ const Booking = ({ tweaks }) => {
       const data = await response.json().catch(() => ({}));
 
       if (response.status === 200 && data.status === 'ok') {
-        setSubmitState({ phase: 'success', firstVisitDate: data.first_visit_date });
+        setSubmitState({ phase: 'success', firstVisitDate: data.first_visit_date_long || data.first_visit_date });
         return;
       }
       if (response.status === 422 && data.status === 'out_of_area') {
@@ -245,7 +248,7 @@ const Booking = ({ tweaks }) => {
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Photo proof emailed after every clean</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Eco-safe, kid-safe, pet-safe formula</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Pause or cancel anytime in your account</li>
-              <li><span className="perk-icon"><Icon.Check size={14}/></span>Service area: {tweaks.city} + 15 miles</li>
+              <li><span className="perk-icon"><Icon.Check size={14}/></span>Service area: all of {tweaks.city}</li>
             </ul>
           </div>
 
@@ -307,17 +310,14 @@ const Booking = ({ tweaks }) => {
                 <div className="booking-summary">
                   <div className="booking-summary-row">
                     <span>{selectedService.title} × {bins} bin{bins>1?'s':''}</span>
-                    <span>${subtotal}</span>
+                    <span>${perClean}{isOneoff ? '' : ' / clean'}</span>
                   </div>
-                  {firstCleanFee > 0 && (
-                    <div className="booking-summary-row">
-                      <span>First-clean deep treatment</span>
-                      <span>${firstCleanFee}</span>
-                    </div>
-                  )}
                   <div className="booking-summary-row total">
                     <span>Due today</span>
-                    <span>${total}</span>
+                    <span>$0</span>
+                  </div>
+                  <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
+                    <span>No card needed now — you're only charged after each clean.</span>
                   </div>
                 </div>
 
@@ -554,8 +554,8 @@ const Booking = ({ tweaks }) => {
                     </span>
                   </div>
                   <div className="booking-summary-row total">
-                    <span>Charged after service</span>
-                    <span>${total}</span>
+                    <span>{isOneoff ? 'Charged after your clean' : 'Charged per clean'}</span>
+                    <span>${perClean}{isOneoff ? '' : ' / clean'}</span>
                   </div>
                 </div>
 

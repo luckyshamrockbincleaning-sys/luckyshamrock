@@ -199,7 +199,7 @@ const Footer = ({ tweaks }) => (
           <h4>Contact</h4>
           <ul>
             <li><a href={`tel:${tweaks.phone}`}>{tweaks.phone}</a></li>
-            <li><a href="mailto:hello@luckyshamrock.co">hello@luckyshamrock.co</a></li>
+            <li><a href="mailto:hello@luckyshamrock.ca">hello@luckyshamrock.ca</a></li>
             <li style={{color: 'rgba(255, 248, 232, 0.75)', fontSize: 15}}>Mon–Sat · 7am–6pm</li>
           </ul>
           <div className="socials" style={{marginTop: 14}}>
@@ -210,7 +210,7 @@ const Footer = ({ tweaks }) => (
         </div>
       </div>
       <div className="footer-bottom">
-        <div>© 2026 Lucky Shamrock Bin Cleaning · All rights reserved</div>
+        <div>© 2026 Lucky Shamrock Garbage Bin Cleaning · All rights reserved</div>
         <div style={{display: 'flex', gap: 18}}>
           <a href="#">Privacy</a>
           <a href="#">Terms</a>

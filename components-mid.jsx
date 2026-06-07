@@ -200,7 +200,7 @@ const Pricing = ({ tweaks, onBookClick }) => {
         </div>
 
         <p style={{marginTop: 40, color: 'var(--ink-3)', fontSize: 14}}>
-          Extra bins: $12/clean. Service area within 15 miles of {tweaks.city}. Prices include tax.
+          Extra bins: $12/clean. Service area: {tweaks.city}. Prices include tax.
         </p>
       </div>
     </section>
