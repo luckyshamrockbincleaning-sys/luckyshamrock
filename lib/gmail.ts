@@ -5,6 +5,13 @@ export interface SendGmailInput {
   subject: string;
   text: string;
   html: string;
+  attachments?: EmailAttachment[];
+}
+
+export interface EmailAttachment {
+  filename: string;
+  contentType: string;
+  contentBase64: string;
 }
 
 export interface SendGmailResult {
@@ -89,13 +96,18 @@ export async function sendViaGmail(input: SendGmailInput): Promise<SendGmailResu
   }
 }
 
-function buildRfc822Message(p: {
+export function buildRfc822Message(p: {
   from: string;
   to: string;
   subject: string;
   text: string;
   html: string;
+  attachments?: EmailAttachment[];
 }): string {
+  if (p.attachments?.length) {
+    return buildMixedMessage(p as typeof p & { attachments: EmailAttachment[] });
+  }
+
   const boundary = `boundary_${crypto.randomUUID()}`;
   return [
     `From: ${p.from}`,
@@ -120,9 +132,68 @@ function buildRfc822Message(p: {
   ].join('\r\n');
 }
 
+function buildMixedMessage(p: {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+  attachments: EmailAttachment[];
+}): string {
+  const mixedBoundary = `mixed_${crypto.randomUUID()}`;
+  const altBoundary = `alt_${crypto.randomUUID()}`;
+  const parts = [
+    `From: ${p.from}`,
+    `To: ${p.to}`,
+    `Subject: ${encodeSubject(p.subject)}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
+    ``,
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+    ``,
+    `--${altBoundary}`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    `Content-Transfer-Encoding: 7bit`,
+    ``,
+    p.text,
+    ``,
+    `--${altBoundary}`,
+    `Content-Type: text/html; charset="UTF-8"`,
+    `Content-Transfer-Encoding: 7bit`,
+    ``,
+    p.html,
+    ``,
+    `--${altBoundary}--`,
+  ];
+
+  for (const a of p.attachments) {
+    parts.push(
+      ``,
+      `--${mixedBoundary}`,
+      `Content-Type: ${a.contentType}`,
+      `Content-Transfer-Encoding: base64`,
+      `Content-Disposition: attachment; filename="${escapeFilename(a.filename)}"`,
+      ``,
+      wrapBase64(a.contentBase64),
+    );
+  }
+
+  parts.push(``, `--${mixedBoundary}--`);
+  return parts.join('\r\n');
+}
+
 function encodeSubject(subject: string): string {
   // RFC 2047 encoded-word for non-ASCII safety. For ASCII this is a no-op.
   // eslint-disable-next-line no-control-regex
   if (!/[^\x00-\x7F]/.test(subject)) return subject;
   return `=?UTF-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`;
+}
+
+function escapeFilename(filename: string): string {
+  return filename.replace(/["\\\r\n]/g, '_');
+}
+
+function wrapBase64(contentBase64: string): string {
+  return contentBase64.replace(/(.{1,76})/g, '$1\r\n').trimEnd();
 }

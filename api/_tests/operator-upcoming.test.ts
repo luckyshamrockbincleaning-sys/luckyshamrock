@@ -60,12 +60,13 @@ describe('GET /api/operator/upcoming', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns actionable visits in the next N days, excluding today and non-actionable statuses', async () => {
+  it('returns all future actionable visits, excluding today and non-actionable statuses', async () => {
     await seedVisit('2026-06-10', 'scheduled', 'Anchor'); // anchor day — excluded
     await seedVisit('2026-06-11', 'scheduled', 'Tomorrow'); // included
     await seedVisit('2026-06-12', 'heading_there', 'Heading'); // included
     await seedVisit('2026-06-15', 'scheduled', 'MidWeek'); // included
-    await seedVisit('2026-06-18', 'scheduled', 'TooFar'); // beyond +7 — excluded
+    await seedVisit('2026-06-18', 'scheduled', 'FartherOut'); // included now
+    await seedVisit('2027-06-18', 'scheduled', 'NextYear'); // included now
     await seedVisit('2026-06-13', 'skipped', 'Skipped'); // excluded
     await seedVisit('2026-06-14', 'done', 'Done'); // excluded
     await seedVisit('2026-06-12', 'cancelled', 'Cancelled'); // excluded
@@ -75,26 +76,21 @@ describe('GET /api/operator/upcoming', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.days).toBe(7);
     const names = res.body.visits.map((v: any) => v.customer_name);
-    expect(names).toEqual(['Tomorrow', 'Heading', 'MidWeek']); // ordered by date asc
+    expect(names).toEqual(['Tomorrow', 'Heading', 'MidWeek', 'FartherOut', 'NextYear']); // ordered by date asc
   });
 
-  it('defaults to 7 days when days is absent and clamps out-of-range values', async () => {
+  it('ignores legacy days limits and still returns all future actionable visits', async () => {
     await seedVisit('2026-06-11', 'scheduled', 'Tomorrow');
-    await seedVisit('2026-06-40'.replace('40', '12'), 'scheduled', 'DayAfter');
+    await seedVisit('2026-06-12', 'scheduled', 'DayAfter');
+    await seedVisit('2026-09-01', 'scheduled', 'Later');
 
     const resDefault = mockRes();
     await handler(await req(true, { date: '2026-06-10' }), resDefault);
-    expect(resDefault.body.days).toBe(7);
+    expect(resDefault.body.visits.map((v: any) => v.customer_name)).toEqual(['Tomorrow', 'DayAfter', 'Later']);
 
-    const resClampLow = mockRes();
-    await handler(await req(true, { date: '2026-06-10', days: '0' }), resClampLow);
-    expect(resClampLow.body.days).toBe(1); // clamped up to 1 → only 2026-06-11
-    expect(resClampLow.body.visits.map((v: any) => v.customer_name)).toEqual(['Tomorrow']);
-
-    const resClampHigh = mockRes();
-    await handler(await req(true, { date: '2026-06-10', days: '9999' }), resClampHigh);
-    expect(resClampHigh.body.days).toBe(60);
+    const resLegacyDays = mockRes();
+    await handler(await req(true, { date: '2026-06-10', days: '1' }), resLegacyDays);
+    expect(resLegacyDays.body.visits.map((v: any) => v.customer_name)).toEqual(['Tomorrow', 'DayAfter', 'Later']);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendViaGmail, isGmailConfigured } from '../gmail.js';
+import { buildRfc822Message, sendViaGmail, isGmailConfigured } from '../gmail.js';
 
 describe('isGmailConfigured', () => {
   it('is false when GMAIL_SERVICE_ACCOUNT_JSON is unset', () => {
@@ -79,5 +79,30 @@ describe('sendViaGmail — real branch entry conditions', () => {
     const r = await sendViaGmail({ to: 'sam@example.com', subject: 's', text: 't', html: 'h' });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/GMAIL_SERVICE_ACCOUNT_JSON/);
+  });
+});
+
+describe('buildRfc822Message', () => {
+  it('builds a multipart/mixed email with html/text alternatives and an attachment', () => {
+    const raw = buildRfc822Message({
+      from: 'hello@luckyshamrock.ca',
+      to: 'sam@example.com',
+      subject: 'Your garbage bin is clean',
+      text: 'Cleaned. Photo proof attached.',
+      html: '<p>Cleaned. Photo proof attached.</p>',
+      attachments: [
+        {
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('fake-image').toString('base64'),
+        },
+      ],
+    });
+
+    expect(raw).toContain('Content-Type: multipart/mixed;');
+    expect(raw).toContain('Content-Type: multipart/alternative;');
+    expect(raw).toContain('Content-Type: image/jpeg');
+    expect(raw).toContain('Content-Disposition: attachment; filename="clean-bin.jpg"');
+    expect(raw).toContain(Buffer.from('fake-image').toString('base64'));
   });
 });

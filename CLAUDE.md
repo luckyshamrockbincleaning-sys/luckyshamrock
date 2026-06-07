@@ -139,6 +139,8 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   delegates to the per-op handlers, which read the id from `req.query.id`.
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
+  `upcoming` returns all future actionable visits after the anchor date, not a
+  7-day window.
 - **Active route lists are actionable only.** `today`/`upcoming` return only
   `scheduled` and `heading_there` visits. `notify`, `done`, and `skip` reject
   `skipped`, `done`, and `cancelled` visits with 409 `not_actionable`.
@@ -148,6 +150,11 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   `COALESCE(visit.bin_count, subscription.bin_count)` so both render correctly.
 - **Operator skip ≠ customer skip:** operator skip just marks the visit `skipped`
   (no replacement). Customer skip (`/api/visit/:id/skip`) inserts a replacement.
+- **Operator Done requires photo proof in the UI.** `/ops` compresses the selected
+  clean-bin photo to JPEG and sends it in `POST /api/operator/act` as
+  `clean_photo`; the Done email attaches it. V1 does **not** store photos
+  durably — email attachment only. Backend accepts no-photo Done for API
+  compatibility but validates any supplied photo (JPEG/PNG/WebP, max 5 MB).
 - **notify/done are double-tap-safe** for free via `sendAndLog`'s `(visit_id, kind)`
   idempotency — a second tap returns `{skipped:true}` and sends no second email.
 - **New env vars:** `OPERATOR_SECRET` (`openssl rand -hex 32`), `OPERATOR_PASSWORD`.

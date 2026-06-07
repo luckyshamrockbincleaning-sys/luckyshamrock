@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { sendEmail, type EmailKind } from './email.js';
+import { sendEmail, type EmailAttachment, type EmailKind } from './email.js';
 import { getDb } from '../db/client.js';
 import { notificationLog } from '../db/schema.js';
 
@@ -9,6 +9,7 @@ export interface SendAndLogInput {
   subject: string;
   body: string;
   html?: string;
+  attachments?: EmailAttachment[];
   customerId: string;
   /** Null for non-visit-bound emails (magic_link). */
   visitId: string | null;
@@ -51,6 +52,7 @@ export async function sendAndLog(input: SendAndLogInput): Promise<SendAndLogResu
     subject: input.subject,
     body: input.body,
     html: input.html,
+    attachments: input.attachments,
   });
 
   const row: Record<string, unknown> = {

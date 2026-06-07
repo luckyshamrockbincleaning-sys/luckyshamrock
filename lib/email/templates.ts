@@ -66,9 +66,12 @@ export function doneTemplate(p: {
   name: string;
   nextVisitDate: string | null;
   reviewUrl?: string | null;
+  hasPhoto?: boolean;
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
+  const photoText = p.hasPhoto ? `\n\nPhoto proof is attached.` : '';
+  const photoHtml = p.hasPhoto ? `<p>Photo proof is attached.</p>` : '';
   const reviewText = p.reviewUrl
     ? `\n\nLoved it? Leave us a review: ${p.reviewUrl}`
     : '';
@@ -78,12 +81,14 @@ export function doneTemplate(p: {
   const text =
     `Hi ${p.name},\n\n` +
     `Garbage bin cleaned. ${nextLine}` +
+    photoText +
     reviewText +
     `\n\n` +
     FOOTER_TEXT;
   const html =
     `<p>Hi ${escapeHtml(p.name)},</p>` +
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
+    photoHtml +
     reviewHtml +
     FOOTER_HTML;
   return { subject, html, text };

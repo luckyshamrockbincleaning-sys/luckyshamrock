@@ -64,6 +64,12 @@ describe('doneTemplate', () => {
     const noReview = doneTemplate({ name: 'Sam', nextVisitDate: null });
     expect(noReview.text.toLowerCase()).not.toContain('review');
   });
+
+  it('mentions photo proof when a clean photo is attached', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
+    expect(t.text.toLowerCase()).toContain('photo');
+    expect(t.html.toLowerCase()).toContain('photo');
+  });
 });
 
 describe('all templates produce non-empty html and text', () => {

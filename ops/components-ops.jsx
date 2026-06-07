@@ -80,6 +80,50 @@ const PAY_BADGE = {
   comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
 };
 
+const CLEAN_PHOTO_MAX_SIDE = 1600;
+const CLEAN_PHOTO_QUALITY = 0.78;
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read photo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load photo. Try a JPEG, PNG, or WebP image.'));
+    img.src = src;
+  });
+}
+
+async function prepareCleanPhoto(file) {
+  if (!file) return null;
+  const dataUrl = await readFileAsDataUrl(file);
+  const img = await loadImage(dataUrl);
+  const scale = Math.min(1, CLEAN_PHOTO_MAX_SIDE / Math.max(img.width, img.height));
+  const width = Math.max(1, Math.round(img.width * scale));
+  const height = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not prepare photo.');
+  ctx.drawImage(img, 0, 0, width, height);
+  const jpg = canvas.toDataURL('image/jpeg', CLEAN_PHOTO_QUALITY);
+  const contentBase64 = jpg.split(',')[1];
+  if (!contentBase64) throw new Error('Could not prepare photo.');
+  return {
+    filename: 'clean-bin.jpg',
+    mime_type: 'image/jpeg',
+    content_base64: contentBase64,
+  };
+}
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
@@ -87,12 +131,34 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const heading = stop.status === 'heading_there';
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
+  const [photoState, setPhotoState] = useState({ phase: 'idle', photo: null, filename: '', message: '' });
   const pay = PAY_BADGE[stop.payment_status];
 
   function doneWithDiscount() {
+    if (!photoState.photo) {
+      setPhotoState((s) => ({ ...s, phase: 'error', message: 'Take a clean-bin photo before tapping Done.' }));
+      return;
+    }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-    onAction('done', stop, { discount_cents });
+    onAction('done', stop, { discount_cents, clean_photo: photoState.photo });
+  }
+
+  async function onPhotoChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setPhotoState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
+    try {
+      const photo = await prepareCleanPhoto(file);
+      setPhotoState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
+    } catch (err) {
+      setPhotoState({
+        phase: 'error',
+        photo: null,
+        filename: file.name,
+        message: err.message || 'Could not prepare photo.',
+      });
+    }
   }
 
   return (
@@ -119,6 +185,31 @@ function StopCard({ stop, onAction, busy, showDate }) {
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
 
       {!isDone && !isCancelled && (
+        <div className="ops-photo" style={{ marginTop: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+            Clean-bin photo
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            disabled={busy}
+            onChange={onPhotoChange}
+            style={{ width: '100%' }}
+          />
+          {photoState.message && (
+            <div style={{
+              marginTop: 6,
+              fontSize: 12,
+              color: photoState.phase === 'error' ? '#7A2222' : 'var(--ink-3, #6b6b6b)',
+            }}>
+              {photoState.filename ? `${photoState.filename} · ` : ''}{photoState.message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isDone && !isCancelled && (
         <div className="ops-discount" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
           <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Discount&nbsp;$</label>
           <input
@@ -137,7 +228,13 @@ function StopCard({ stop, onAction, busy, showDate }) {
           </button>
         )}
         {!isDone && !isCancelled && (
-          <button className="btn btn-go ops-btn" disabled={busy} onClick={doneWithDiscount}>Done</button>
+          <button
+            className="btn btn-go ops-btn"
+            disabled={busy || photoState.phase === 'loading' || !photoState.photo}
+            onClick={doneWithDiscount}
+          >
+            Done
+          </button>
         )}
         {!isDone && !isCancelled && !isSkipped && (
           <button className="btn btn-skip ops-btn" disabled={busy} onClick={() => onAction('skip', stop)}>Skip</button>
@@ -157,7 +254,7 @@ function OpsApp() {
 
   const load = useCallback(async (which) => {
     setData((d) => ({ ...d, loading: true }));
-    const url = which === 'upcoming' ? '/api/operator/upcoming?days=7' : '/api/operator/today';
+    const url = which === 'upcoming' ? '/api/operator/upcoming' : '/api/operator/today';
     try {
       const r = await fetch(url, { credentials: 'same-origin' });
       if (r.status === 401) {
@@ -196,6 +293,9 @@ function OpsApp() {
       }
       if (action === 'done' && opts.discount_cents > 0) {
         body.discount_cents = opts.discount_cents;
+      }
+      if (action === 'done' && opts.clean_photo) {
+        body.clean_photo = opts.clean_photo;
       }
 
       const r = await fetch('/api/operator/act', {
@@ -258,7 +358,7 @@ function OpsApp() {
   return (
     <div className="ops-shell">
       <div className="ops-header">
-        <h1>{view === 'today' ? "Today's route" : 'Next 7 days'}</h1>
+        <h1>{view === 'today' ? "Today's route" : 'All upcoming'}</h1>
         <a className="brand" href="/">Lucky Shamrock</a>
       </div>
 
@@ -267,7 +367,7 @@ function OpsApp() {
           Today{data.date && view === 'today' ? ` · ${formatDate(data.date)}` : ''}
         </button>
         <button className={view === 'upcoming' ? 'active' : ''} onClick={() => setView('upcoming')}>
-          Next 7 days
+          All upcoming
         </button>
       </div>
 
@@ -277,7 +377,7 @@ function OpsApp() {
         <div className="ops-card"><p>Loading…</p></div>
       ) : data.stops.length === 0 ? (
         <div className="ops-card">
-          <p className="muted">{view === 'today' ? 'No stops scheduled today.' : 'Nothing scheduled in the next 7 days.'}</p>
+          <p className="muted">{view === 'today' ? 'No stops scheduled today.' : 'Nothing booked after today.'}</p>
         </div>
       ) : (
         data.stops.map((s) => (

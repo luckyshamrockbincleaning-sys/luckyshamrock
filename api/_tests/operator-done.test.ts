@@ -27,10 +27,10 @@ function mockRes() {
   return res;
 }
 
-async function req(authed: boolean, id: string | undefined, method = 'POST'): Promise<any> {
+async function req(authed: boolean, id: string | undefined, method = 'POST', body: Record<string, unknown> = {}): Promise<any> {
   const headers: Record<string, string> = {};
   if (authed) headers.cookie = `${OPERATOR_COOKIE_NAME}=${await signOperatorCookie()}`;
-  return { method, headers, query: id !== undefined ? { id } : {} };
+  return { method, headers, query: id !== undefined ? { id } : {}, body };
 }
 
 async function seedCustomer(): Promise<string> {
@@ -96,6 +96,63 @@ describe('POST /api/operator/visit/:id/done', () => {
       .from(notificationLog)
       .where(and(eq(notificationLog.visitId, v1), eq(notificationLog.kind, 'done')));
     expect(logs).toHaveLength(1);
+  });
+
+  it('accepts a clean-bin photo when marking done', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      clean_photo: {
+        filename: 'clean-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.from('fake-image').toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+  });
+
+  it('returns 400 for an unsupported clean photo mime type before marking done', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      clean_photo: {
+        filename: 'clean-bin.gif',
+        mime_type: 'image/gif',
+        content_base64: Buffer.from('fake-image').toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(400);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
+  });
+
+  it('returns 400 for an oversized clean photo before marking done', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      clean_photo: {
+        filename: 'clean-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(400);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
   });
 
   it('returns next_visit_date null when there is no later scheduled visit', async () => {

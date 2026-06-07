@@ -4,7 +4,7 @@
  * stub). Signature and result shape are stable across Phase 1 and Phase 2.
  */
 
-import { sendViaGmail, type SendGmailResult } from './gmail.js';
+import { sendViaGmail, type EmailAttachment, type SendGmailResult } from './gmail.js';
 
 export type EmailKind =
   | 'magic_link'
@@ -21,6 +21,8 @@ export interface SendEmailInput {
   body: string;
   /** Optional HTML body. If absent, body is wrapped in <pre>. */
   html?: string;
+  /** Optional email attachments, already base64-encoded. */
+  attachments?: EmailAttachment[];
 }
 
 export interface SendEmailResult {
@@ -36,9 +38,12 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     subject: input.subject,
     text: input.body,
     html,
+    attachments: input.attachments,
   });
   return result;
 }
+
+export type { EmailAttachment };
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

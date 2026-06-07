@@ -9,8 +9,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, gt, gte, inArray, lte, asc, sql } from 'drizzle-orm';
-import { addDays } from 'date-fns';
+import { and, eq, gt, inArray, asc, sql } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, payment } from '../db/schema.js';
 import {
@@ -27,14 +26,26 @@ import { isStripeConfigured } from './stripe.js';
 import { chargeOffSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
 import type { Cadence } from './schedule.js';
+import type { EmailAttachment } from './email.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIONABLE_VISIT_STATUSES: Array<'scheduled' | 'heading_there'> = ['scheduled', 'heading_there'];
+const MAX_CLEAN_PHOTO_BYTES = 5 * 1024 * 1024;
+const CLEAN_PHOTO_MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
 const actSchema = z
   .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note']) })
   .passthrough(); // keep `text` through for the note op
+const cleanPhotoSchema = z.object({
+  filename: z.string().trim().min(1).max(160).optional(),
+  mime_type: z.string().trim().min(1).max(80),
+  content_base64: z.string().trim().min(1),
+});
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -57,6 +68,36 @@ const stopColumns = {
 
 function isActionableVisitStatus(status: string): boolean {
   return ACTIONABLE_VISIT_STATUSES.includes(status as 'scheduled' | 'heading_there');
+}
+
+function parseCleanPhotoAttachment(input: unknown): { ok: true; attachment: EmailAttachment | null } | { ok: false; message: string } {
+  if (input === undefined || input === null) return { ok: true, attachment: null };
+  const parsed = cleanPhotoSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: 'clean_photo is invalid' };
+
+  const ext = CLEAN_PHOTO_MIME_TO_EXT[parsed.data.mime_type];
+  if (!ext) return { ok: false, message: 'clean_photo must be a JPEG, PNG, or WebP image' };
+
+  const base64 = parsed.data.content_base64.replace(/\s/g, '');
+  if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return { ok: false, message: 'clean_photo content must be base64' };
+  }
+
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length === 0) return { ok: false, message: 'clean_photo is empty' };
+  if (bytes.length > MAX_CLEAN_PHOTO_BYTES) {
+    return { ok: false, message: 'clean_photo must be 5 MB or smaller' };
+  }
+
+  const fallbackFilename = `clean-bin.${ext}`;
+  return {
+    ok: true,
+    attachment: {
+      filename: parsed.data.filename?.replace(/[^A-Za-z0-9._-]/g, '_') || fallbackFilename,
+      contentType: parsed.data.mime_type,
+      contentBase64: base64,
+    },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -122,7 +163,7 @@ export async function handleToday(req: VercelRequest, res: VercelResponse): Prom
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// GET /api/operator/upcoming?days=7 (&date=YYYY-MM-DD anchor)
+// GET /api/operator/upcoming (?date=YYYY-MM-DD anchor)
 // ─────────────────────────────────────────────────────────────────────
 export async function handleUpcoming(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'GET') {
@@ -138,14 +179,6 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
     const anchorISO = typeof q === 'string' && DATE_RE.test(q) ? q : operatorTodayISO();
     const anchor = new Date(`${anchorISO}T00:00:00Z`);
 
-    let days = parseInt(String(req.query.days ?? ''), 10);
-    if (!Number.isFinite(days)) days = 7;
-    days = Math.max(1, Math.min(60, days));
-
-    // Tomorrow through anchor+days, inclusive. Today is covered by /today.
-    const start = addDays(anchor, 1);
-    const end = addDays(anchor, days);
-
     const db = getDb();
     const rows = await db
       .select(stopColumns)
@@ -154,14 +187,13 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
       .leftJoin(subscription, eq(visit.subscriptionId, subscription.id))
       .where(
         and(
-          gte(visit.scheduledFor, start),
-          lte(visit.scheduledFor, end),
+          gt(visit.scheduledFor, anchor),
           inArray(visit.status, ACTIONABLE_VISIT_STATUSES),
         ),
       )
       .orderBy(asc(visit.scheduledFor), asc(customer.name));
 
-    res.status(200).json({ status: 'ok', days, visits: rows.map(toOperatorVisit) });
+    res.status(200).json({ status: 'ok', visits: rows.map(toOperatorVisit) });
   } catch (err) {
     console.error('[operator/upcoming] failed', err);
     const message = err instanceof Error ? err.message : 'unknown_error';
@@ -257,6 +289,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const discountCents = Number.isFinite(req.body?.discount_cents)
     ? Math.max(0, Math.trunc(req.body.discount_cents))
     : 0;
+  const cleanPhoto = parseCleanPhotoAttachment(req.body?.clean_photo);
+  if (!cleanPhoto.ok) {
+    res.status(400).json({ status: 'invalid', message: cleanPhoto.message });
+    return;
+  }
 
   try {
     const db = getDb();
@@ -365,7 +402,12 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     }
 
     // Idempotent on (visitId, 'done').
-    const tpl = doneTemplate({ name: row.name, nextVisitDate, reviewUrl: process.env.REVIEW_URL || null });
+    const tpl = doneTemplate({
+      name: row.name,
+      nextVisitDate,
+      reviewUrl: process.env.REVIEW_URL || null,
+      hasPhoto: !!cleanPhoto.attachment,
+    });
     const result = await sendAndLog({
       kind: 'done',
       to: row.email,
@@ -374,6 +416,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       html: tpl.html,
       customerId: row.customerId,
       visitId,
+      attachments: cleanPhoto.attachment ? [cleanPhoto.attachment] : undefined,
     });
 
     res.status(200).json({

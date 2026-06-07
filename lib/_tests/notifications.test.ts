@@ -106,4 +106,35 @@ describe('sendAndLog', () => {
     expect(r.skipped).toBeUndefined();
     expect(mockSendEmail).toHaveBeenCalledOnce();
   });
+
+  it('passes attachments through to sendEmail', async () => {
+    mockSendEmail.mockResolvedValueOnce({ ok: true, gmailMessageId: 'stub-photo' });
+    mockSelectWhere.mockResolvedValueOnce([]);
+
+    await sendAndLog({
+      kind: 'done',
+      to: 'sam@example.com',
+      subject: 'done',
+      body: 'cleaned',
+      html: '<p>cleaned</p>',
+      customerId: 'cust-1',
+      visitId: 'visit-1',
+      attachments: [
+        {
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('fake-image').toString('base64'),
+        },
+      ],
+    });
+
+    expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [
+        expect.objectContaining({
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+        }),
+      ],
+    }));
+  });
 });
