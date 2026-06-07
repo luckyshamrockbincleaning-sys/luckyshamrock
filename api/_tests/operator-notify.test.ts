@@ -112,4 +112,12 @@ describe('POST /api/operator/visit/:id/notify', () => {
     expect(res.statusCode).toBe(409);
     expect(res.body.status).toBe('not_actionable');
   });
+
+  it('returns 409 when the visit is skipped', async () => {
+    const visitId = await seed('skipped');
+    const res = mockRes();
+    await handler(await req(true, visitId), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.status).toBe('not_actionable');
+  });
 });

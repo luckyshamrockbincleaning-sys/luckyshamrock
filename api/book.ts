@@ -169,9 +169,8 @@ export default async function handler(
 
     // Send ONE email at booking: booking_confirmed already carries the manage
     // link built from `tokenPlain`. We deliberately do NOT also send a separate
-    // magic_link email here — both would embed the SAME single-use token, so
-    // whichever link the customer clicked first would consume it and the other
-    // would be dead. The magic_link email is reserved for the /manage
+    // magic_link email here — both would embed the same token and create
+    // duplicate inbox noise. The magic_link email is reserved for the /manage
     // "email me a link" flow, which mints its own fresh token.
     const bookingTemplate = bookingConfirmedTemplate({
       name: data.name,

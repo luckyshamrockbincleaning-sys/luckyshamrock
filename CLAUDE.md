@@ -108,12 +108,12 @@ DATABASE_URL=<test-url> DATABASE_URL_UNPOOLED=<test-url-unpooled> npx drizzle-ki
 ```
 Schema drift requires re-running `drizzle-kit push --force` against the test URL. Don't add real customer-like data to `neondb_test` — it gets truncated every test case.
 
-**Open follow-up — wrap `/api/book` writes in a transaction.** Currently the customer + subscription + visit + magic_link_token INSERTs are sequential. If one fails midway, you leave orphan rows. Real risk is small (retry path mostly heals it) but worth fixing once `db.transaction(...)` is needed for a Phase 3 mutation endpoint anyway.
+**Booking write atomicity:** `/api/book` wraps customer + subscription + visit + magic_link_token writes in one `db.transaction(...)`; email sends and best-effort Stripe customer provisioning stay outside the transaction.
 
 ## Auth + email conventions (Phase 2+)
 
 - **Session cookies** are HS256 JWTs signed with `SESSION_SECRET`. Use `signSessionCookie` / `verifySessionCookie` from `lib/cookies.ts`. Cookie name: `ls_session`. 30-day absolute TTL. HTTP-only, Secure, SameSite=Lax. Sliding renewal lives in Phase 3.
-- **Magic-link tokens** are 32 random bytes URL-safe base64. Always email the plaintext; store the SHA-256 hash via `hashToken()` from `lib/tokens.ts`. 15-min TTL, single-use (`consumed_at`).
+- **Magic-link tokens** are 32 random bytes URL-safe base64. Always email the plaintext; store the SHA-256 hash via `hashToken()` from `lib/tokens.ts`. 1-hour TTL. Tokens are reusable within their TTL so inbox link scanners and repeat clicks do not break login; `consumed_at` records first use only.
 - **Sending email** goes through `sendAndLog` (`lib/notifications.ts`), which wraps `sendEmail` and writes to `notification_log`. For visit-bound emails (`visitId !== null`) the wrapper short-circuits if a prior row exists with the same `(visit_id, kind)` — DB-enforced idempotency. Magic-link rows have `visitId: null` and are always sent.
 - **Templates** live in `lib/email/templates.ts` as pure `(props) => {subject, html, text}` functions. Add a new template by exporting another function; don't pull in a template engine.
 - **Gmail API client** is `lib/gmail.ts`. Sends via service-account JWT → OAuth → REST POST to `gmail.googleapis.com`. Falls back to a console-log stub (`[email:stub]` tag) when `GMAIL_SERVICE_ACCOUNT_JSON` is unset — that's the local dev / test path.
@@ -139,6 +139,9 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   delegates to the per-op handlers, which read the id from `req.query.id`.
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
+- **Active route lists are actionable only.** `today`/`upcoming` return only
+  `scheduled` and `heading_there` visits. `notify`, `done`, and `skip` reject
+  `skipped`, `done`, and `cancelled` visits with 409 `not_actionable`.
 - **`bin_count` per visit type:** recurring visits derive it from the
   subscription (LEFT JOIN, `visit.bin_count` null); one-off visits store it on
   `visit.bin_count` (no subscription to derive from). The operator view selects

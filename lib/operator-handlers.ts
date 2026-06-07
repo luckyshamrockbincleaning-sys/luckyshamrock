@@ -9,7 +9,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, ne, gt, gte, lte, asc, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, lte, asc, sql } from 'drizzle-orm';
 import { addDays } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, payment } from '../db/schema.js';
@@ -29,6 +29,7 @@ import { baseChargeCents, finalChargeCents } from './pricing.js';
 import type { Cadence } from './schedule.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ACTIONABLE_VISIT_STATUSES: Array<'scheduled' | 'heading_there'> = ['scheduled', 'heading_there'];
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
 const actSchema = z
@@ -53,6 +54,10 @@ const stopColumns = {
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
 } as const;
+
+function isActionableVisitStatus(status: string): boolean {
+  return ACTIONABLE_VISIT_STATUSES.includes(status as 'scheduled' | 'heading_there');
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // POST /api/operator/login
@@ -105,7 +110,7 @@ export async function handleToday(req: VercelRequest, res: VercelResponse): Prom
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
       .leftJoin(subscription, eq(visit.subscriptionId, subscription.id))
-      .where(and(eq(visit.scheduledFor, targetDate), ne(visit.status, 'cancelled')))
+      .where(and(eq(visit.scheduledFor, targetDate), inArray(visit.status, ACTIONABLE_VISIT_STATUSES)))
       .orderBy(asc(customer.name));
 
     res.status(200).json({ status: 'ok', date: targetISO, visits: rows.map(toOperatorVisit) });
@@ -151,7 +156,7 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
         and(
           gte(visit.scheduledFor, start),
           lte(visit.scheduledFor, end),
-          ne(visit.status, 'cancelled'),
+          inArray(visit.status, ACTIONABLE_VISIT_STATUSES),
         ),
       )
       .orderBy(asc(visit.scheduledFor), asc(customer.name));
@@ -199,7 +204,7 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
       res.status(404).json({ status: 'not_found' });
       return;
     }
-    if (row.status === 'done' || row.status === 'cancelled') {
+    if (!isActionableVisitStatus(row.status)) {
       res.status(409).json({ status: 'not_actionable', message: `visit is ${row.status}` });
       return;
     }
@@ -276,8 +281,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       res.status(404).json({ status: 'not_found' });
       return;
     }
-    if (row.status === 'cancelled') {
-      res.status(409).json({ status: 'not_actionable', message: 'visit is cancelled' });
+    if (!isActionableVisitStatus(row.status)) {
+      res.status(409).json({ status: 'not_actionable', message: `visit is ${row.status}` });
       return;
     }
 
@@ -408,7 +413,7 @@ export async function handleSkip(req: VercelRequest, res: VercelResponse): Promi
       res.status(404).json({ status: 'not_found' });
       return;
     }
-    if (row.status === 'done' || row.status === 'cancelled') {
+    if (!isActionableVisitStatus(row.status)) {
       res.status(409).json({ status: 'not_actionable', message: `visit is ${row.status}` });
       return;
     }

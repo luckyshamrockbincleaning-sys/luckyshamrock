@@ -86,7 +86,7 @@ describe('POST /api/book — happy path', () => {
   it('creates a one-off visit with no subscription', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',
-      body: { ...validBody, plan: 'oneoff', oneoff_date: '2026-07-15' },
+      body: { ...validBody, plan: 'oneoff', oneoff_date: '2099-07-15' },
     });
     const res = mockRes<typeof handler>();
     await handler(req, res);
@@ -103,7 +103,7 @@ describe('POST /api/book — happy path', () => {
     const visits = await db.select().from(visit).where(eq(visit.customerId, c!.id));
     expect(visits).toHaveLength(1);
     expect(visits[0]!.subscriptionId).toBeNull();
-    expect(visits[0]!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-07-15');
+    expect(visits[0]!.scheduledFor.toISOString().slice(0, 10)).toBe('2099-07-15');
     // One-off visits have no subscription, so bin_count is stored on the visit.
     expect(visits[0]!.binCount).toBe(2);
   });
@@ -130,8 +130,8 @@ describe('POST /api/book — happy path', () => {
     expect(tokens[0]!.consumedAt).toBeNull();
 
     // Exactly ONE email at booking: booking_confirmed (which carries the manage
-    // link). We do NOT also send a magic_link email — both would embed the same
-    // single-use token, so the second link clicked would be dead.
+    // link). We do NOT also send a magic_link email — that would duplicate the
+    // same token and create unnecessary inbox noise.
     const logs = await db.select().from(notificationLog);
     const kinds = logs.map((l) => l.kind);
     expect(kinds).toContain('booking_confirmed');
@@ -151,13 +151,7 @@ describe('POST /api/book — atomicity', () => {
     errSpy.mockRestore();
   });
 
-  it('rolls back the new customer row when a later write fails mid-transaction', async () => {
-    // '2026-13-45' passes the zod YYYY-MM-DD regex but is not a real calendar
-    // date, so `new Date(...)` is Invalid and the visit insert throws *after*
-    // the customer insert. Without wrapping the writes in a transaction the
-    // customer row orphans; with one, the whole booking rolls back. (If a future
-    // change validates oneoff_date as a real date, swap this for another
-    // mid-transaction failure vector — the point is rollback, not the date.)
+  it('rejects invalid one-off dates before writing any rows', async () => {
     const email = 'atomic-rollback@example.com';
     const req = mockReq<typeof handler>({
       method: 'POST',
@@ -166,14 +160,16 @@ describe('POST /api/book — atomicity', () => {
     const res = mockRes<typeof handler>();
     await handler(req, res);
 
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({
+      status: 'invalid',
+      errors: expect.objectContaining({
+        oneoff_date: expect.any(Array),
+      }),
+    });
 
     const db = getDb();
     const rows = await db.select().from(customer).where(eq(customer.email, email));
     expect(rows).toHaveLength(0);
-
-    // postgres-js echoes the rolled-back serialization error on a later tick;
-    // let it flush while the console.error spy is still installed.
-    await new Promise((r) => setTimeout(r, 20));
   });
 });

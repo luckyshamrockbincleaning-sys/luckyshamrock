@@ -294,7 +294,7 @@ const Booking = ({ tweaks }) => {
                 <div className="field" style={{marginTop: 22}}>
                   <label>How many garbage bins?</label>
                   <div style={{display: 'flex', gap: 8}}>
-                    {[1,2,3,4].map(n => (
+                    {[1,2,3].map(n => (
                       <button
                         key={n}
                         onClick={() => setBins(n)}

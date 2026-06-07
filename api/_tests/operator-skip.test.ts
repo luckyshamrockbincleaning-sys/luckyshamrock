@@ -90,4 +90,12 @@ describe('POST /api/operator/visit/:id/skip', () => {
     await handler(await req(true, visitId), res);
     expect(res.statusCode).toBe(409);
   });
+
+  it('returns 409 when the visit is already skipped', async () => {
+    const { visitId } = await seed('skipped');
+    const res = mockRes();
+    await handler(await req(true, visitId), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.status).toBe('not_actionable');
+  });
 });

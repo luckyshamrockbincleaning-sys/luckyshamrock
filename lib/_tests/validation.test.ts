@@ -23,9 +23,21 @@ describe('bookRequestSchema', () => {
     const result = bookRequestSchema.safeParse({
       ...valid,
       plan: 'oneoff',
-      oneoff_date: '2026-06-15',
+      oneoff_date: '2099-07-15',
     });
     expect(result.success).toBe(true);
+  });
+
+  it('rejects one-off dates that are invalid, past, or Sunday', () => {
+    expect(
+      bookRequestSchema.safeParse({ ...valid, plan: 'oneoff', oneoff_date: '2026-13-45' }).success,
+    ).toBe(false);
+    expect(
+      bookRequestSchema.safeParse({ ...valid, plan: 'oneoff', oneoff_date: '2000-01-01' }).success,
+    ).toBe(false);
+    expect(
+      bookRequestSchema.safeParse({ ...valid, plan: 'oneoff', oneoff_date: '2099-07-19' }).success,
+    ).toBe(false);
   });
 
   it('rejects one-off booking without oneoff_date', () => {
@@ -41,7 +53,7 @@ describe('bookRequestSchema', () => {
     const result = bookRequestSchema.safeParse({
       ...valid,
       plan: 'monthly',
-      oneoff_date: '2026-06-15',
+      oneoff_date: '2099-07-15',
     });
     expect(result.success).toBe(false);
   });

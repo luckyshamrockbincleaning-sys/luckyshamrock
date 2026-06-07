@@ -75,7 +75,7 @@ function LoginCard() {
     return (
       <div className="manage-card login-card">
         <h2>Check your inbox.</h2>
-        <p>If we have a booking for that email, a manage link is on its way (15-minute expiry).</p>
+        <p>If we have a booking for that email, a manage link is on its way (1-hour expiry).</p>
         <button className="btn btn-ghost" onClick={() => { setSent(false); setEmail(''); }}>Use a different email</button>
       </div>
     );

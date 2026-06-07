@@ -60,11 +60,14 @@ describe('GET /api/operator/upcoming', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns visits in the next N days, excluding today and cancelled', async () => {
+  it('returns actionable visits in the next N days, excluding today and non-actionable statuses', async () => {
     await seedVisit('2026-06-10', 'scheduled', 'Anchor'); // anchor day — excluded
     await seedVisit('2026-06-11', 'scheduled', 'Tomorrow'); // included
+    await seedVisit('2026-06-12', 'heading_there', 'Heading'); // included
     await seedVisit('2026-06-15', 'scheduled', 'MidWeek'); // included
     await seedVisit('2026-06-18', 'scheduled', 'TooFar'); // beyond +7 — excluded
+    await seedVisit('2026-06-13', 'skipped', 'Skipped'); // excluded
+    await seedVisit('2026-06-14', 'done', 'Done'); // excluded
     await seedVisit('2026-06-12', 'cancelled', 'Cancelled'); // excluded
 
     const res = mockRes();
@@ -74,7 +77,7 @@ describe('GET /api/operator/upcoming', () => {
     expect(res.body.status).toBe('ok');
     expect(res.body.days).toBe(7);
     const names = res.body.visits.map((v: any) => v.customer_name);
-    expect(names).toEqual(['Tomorrow', 'MidWeek']); // ordered by date asc
+    expect(names).toEqual(['Tomorrow', 'Heading', 'MidWeek']); // ordered by date asc
   });
 
   it('defaults to 7 days when days is absent and clamps out-of-range values', async () => {

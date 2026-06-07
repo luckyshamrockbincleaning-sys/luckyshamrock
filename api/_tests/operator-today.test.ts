@@ -81,10 +81,13 @@ describe('GET /api/operator/today', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("lists the day's visits joined to customer + subscription bin_count, excluding cancelled", async () => {
+  it("lists the day's actionable visits joined to customer + subscription bin_count", async () => {
     await seedVisit({ date: '2026-06-10', withSub: true, binCount: 3, name: 'Alice' });
     // One-off with its bin count stored on the visit row (no subscription).
     await seedVisit({ date: '2026-06-10', withSub: false, visitBinCount: 1, name: 'Bob' });
+    await seedVisit({ date: '2026-06-10', status: 'heading_there', name: 'Bea' });
+    await seedVisit({ date: '2026-06-10', status: 'skipped', name: 'Skip' });
+    await seedVisit({ date: '2026-06-10', status: 'done', name: 'Done' });
     await seedVisit({ date: '2026-06-10', status: 'cancelled', name: 'Cara' });
     await seedVisit({ date: '2026-06-11', name: 'Dave' }); // other day
 
@@ -94,7 +97,7 @@ describe('GET /api/operator/today', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
     expect(res.body.date).toBe('2026-06-10');
-    expect(res.body.visits).toHaveLength(2);
+    expect(res.body.visits).toHaveLength(3);
 
     const byName: Record<string, any> = Object.fromEntries(
       res.body.visits.map((v: any) => [v.customer_name, v]),
@@ -104,6 +107,9 @@ describe('GET /api/operator/today', () => {
     expect(byName.Alice.scheduled_for).toBe('2026-06-10');
     // ...one-off stop reads it off the visit (COALESCE picks visit.bin_count).
     expect(byName.Bob.bin_count).toBe(1);
+    expect(byName.Bea.status).toBe('heading_there');
+    expect(byName.Skip).toBeUndefined();
+    expect(byName.Done).toBeUndefined();
     expect(byName.Cara).toBeUndefined();
     expect(byName.Dave).toBeUndefined();
   });

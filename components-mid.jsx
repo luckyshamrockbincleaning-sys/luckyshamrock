@@ -151,7 +151,7 @@ const Pricing = ({ tweaks, onBookClick }) => {
       name: "Monthly",
       sub: "The neighborhood favorite.",
       price: 35, unit: "per garbage bin · monthly",
-      features: ["1 garbage bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", "10% off extra bins"],
+      features: ["1 garbage bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", "Add up to 3 bins"],
       featured: true,
     },
     {
@@ -200,7 +200,7 @@ const Pricing = ({ tweaks, onBookClick }) => {
         </div>
 
         <p style={{marginTop: 40, color: 'var(--ink-3)', fontSize: 14}}>
-          Extra bins: $12/clean. Service area: {tweaks.city}. Prices include tax.
+          Each bin is priced separately. Service area: {tweaks.city}. Prices include tax.
         </p>
       </div>
     </section>
