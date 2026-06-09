@@ -400,7 +400,7 @@ const Booking = ({ tweaks }) => {
                     <span>${perClean}{isOneoff ? '' : ' / clean'}</span>
                   </div>
                   <div className="booking-summary-row total">
-                    <span>Due today</span>
+                    <span>Charged today</span>
                     <span>$0</span>
                   </div>
                   <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
