@@ -9,7 +9,11 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../../.
 
 const updateSchema = z
   .object({
-    cadence: z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']).optional(),
+    // Only SOLD plans are switchable-into (mirrors lib/validation.ts planField).
+    // bimonthly/quarterly stay in the DB enum for legacy subs, but those bill at
+    // legacy prices the storefront never shows — a customer must not be able to
+    // switch into one from /manage.
+    cadence: z.enum(['monthly', 'seasonal']).optional(),
     bin_count: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   })
   .refine((d) => d.cadence !== undefined || d.bin_count !== undefined, {

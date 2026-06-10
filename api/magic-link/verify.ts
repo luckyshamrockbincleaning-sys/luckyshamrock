@@ -22,12 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const tokenHash = hashToken(tokenParam);
     const [row] = await db.select().from(magicLinkToken).where(eq(magicLinkToken.token, tokenHash));
 
-    if (!row) {
-      res.status(400).json({ status: 'invalid', message: 'token not found' });
-      return;
-    }
-    if (row.expiresAt.getTime() <= Date.now()) {
-      res.status(400).json({ status: 'invalid', message: 'token expired' });
+    // A human clicking a dead email link should land on the manage sign-in
+    // card with a friendly banner + the "email me a fresh link" form — not on
+    // a raw JSON error. (?link=expired is read by /manage's LoginCard.)
+    if (!row || row.expiresAt.getTime() <= Date.now()) {
+      res.redirect(307, '/manage?link=expired');
       return;
     }
     // NOTE: tokens are reusable within their TTL — we do NOT reject an already-

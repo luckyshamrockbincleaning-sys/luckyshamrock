@@ -67,11 +67,31 @@ export function doneTemplate(p: {
   nextVisitDate: string | null;
   reviewUrl?: string | null;
   hasPhoto?: boolean;
+  /**
+   * Payment outcome for this clean — the email doubles as the customer's
+   * receipt, since charging happens silently on the operator's Done tap.
+   * - charged: card billed `amountCents` (include the amount).
+   * - comped:  fully discounted — explicitly say no charge.
+   * - failed:  card declined — tell the customer so the /manage banner isn't
+   *            their first hint.
+   * - none:    no billing attempted (no card on file / Stripe unconfigured).
+   */
+  charge?: { kind: 'charged' | 'comped' | 'failed' | 'none'; amountCents?: number };
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
   const photoText = p.hasPhoto ? `\n\nPhoto proof is attached.` : '';
   const photoHtml = p.hasPhoto ? `<p>Photo proof is attached.</p>` : '';
+  let chargeLine = '';
+  if (p.charge?.kind === 'charged' && typeof p.charge.amountCents === 'number') {
+    chargeLine = `Your card on file was charged ${formatCad(p.charge.amountCents)}.`;
+  } else if (p.charge?.kind === 'comped') {
+    chargeLine = `This clean was on us — no charge.`;
+  } else if (p.charge?.kind === 'failed') {
+    chargeLine = `We couldn't charge your card on file — please update your payment method from your account, and we'll sort out the rest.`;
+  }
+  const chargeText = chargeLine ? `\n\n${chargeLine}` : '';
+  const chargeHtml = chargeLine ? `<p>${escapeHtml(chargeLine)}</p>` : '';
   const reviewText = p.reviewUrl
     ? `\n\nLoved it? Leave us a review: ${p.reviewUrl}`
     : '';
@@ -81,6 +101,7 @@ export function doneTemplate(p: {
   const text =
     `Hi ${p.name},\n\n` +
     `Garbage bin cleaned. ${nextLine}` +
+    chargeText +
     photoText +
     reviewText +
     `\n\n` +
@@ -88,10 +109,16 @@ export function doneTemplate(p: {
   const html =
     `<p>Hi ${escapeHtml(p.name)},</p>` +
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
+    chargeHtml +
     photoHtml +
     reviewHtml +
     FOOTER_HTML;
   return { subject, html, text };
+}
+
+/** Cents → "$35.00" (CAD amounts are always shown with two decimals). */
+function formatCad(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────

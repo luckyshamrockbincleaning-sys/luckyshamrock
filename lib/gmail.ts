@@ -69,7 +69,9 @@ export async function sendViaGmail(input: SendGmailInput): Promise<SendGmailResu
       return { ok: false, error: 'no access token returned by Google' };
     }
 
-    const raw = buildRfc822Message({ from: sendAs, ...input });
+    // Display name matters: customers should see "Lucky Shamrock", not the
+    // bare mailbox address, in their inbox sender column.
+    const raw = buildRfc822Message({ from: `"Lucky Shamrock" <${sendAs}>`, ...input });
     const encoded = Buffer.from(raw, 'utf-8').toString('base64url');
 
     const resp = await fetch(

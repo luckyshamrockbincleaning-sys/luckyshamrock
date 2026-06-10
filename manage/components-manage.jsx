@@ -11,6 +11,16 @@ const CADENCE_LABEL = {
   quarterly: 'Quarterly (every 13 weeks)',
 };
 
+// Plans a customer may switch INTO — only what the storefront sells, with the
+// per-clean price shown (mirrors window.LS_PRICING used on the main site).
+// bimonthly/quarterly are legacy: still labelled above for customers already on
+// them, but never offered as a switch target (the API rejects them too).
+const SOLD_CADENCES = ['monthly', 'seasonal'];
+const CADENCE_PRICE_LABEL = {
+  monthly: 'Monthly (every 4 weeks) — $35/clean',
+  seasonal: 'Three Wash Season (3×/year) — $105/season',
+};
+
 const PICKUP_LABEL = {
   monday: 'Monday',
   tuesday: 'Tuesday',
@@ -47,6 +57,11 @@ function LoginCard() {
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState('');
+  // /api/magic-link/verify redirects dead links here with ?link=expired so the
+  // customer gets a banner + the resend form instead of a raw JSON error.
+  const [linkExpired, setLinkExpired] = useState(
+    () => new URLSearchParams(window.location.search).get('link') === 'expired',
+  );
 
   async function submit(e) {
     e.preventDefault();
@@ -85,6 +100,13 @@ function LoginCard() {
     <div className="manage-card login-card">
       <h2>Sign in to manage your booking.</h2>
       <p>We'll email you a one-tap link.</p>
+      {linkExpired && (
+        <Flash
+          kind="err"
+          text="That manage link has expired — they only last an hour. Enter your email below and we'll send you a fresh one."
+          onDismiss={() => setLinkExpired(false)}
+        />
+      )}
       <Flash kind="err" text={err} />
       <form onSubmit={submit}>
         <div className="form-row" style={{justifyContent: 'center'}}>
@@ -132,7 +154,12 @@ function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
             <div className="field">
               <label>Cadence</label>
               <select value={cadence} onChange={(e) => setCadence(e.target.value)} disabled={busy}>
-                {Object.entries(CADENCE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                {/* Legacy cadence (bimonthly/quarterly)? Show it so the select
+                    reflects reality, but it disappears once they switch off. */}
+                {!SOLD_CADENCES.includes(subscription.cadence) && (
+                  <option value={subscription.cadence}>{CADENCE_LABEL[subscription.cadence]} (legacy)</option>
+                )}
+                {SOLD_CADENCES.map((v) => <option key={v} value={v}>{CADENCE_PRICE_LABEL[v]}</option>)}
               </select>
             </div>
             <div className="field">
@@ -339,7 +366,7 @@ function ManageApp() {
       const out = await postJson(`/api/visit/${visitId}/skip`);
       setFlash({
         kind: 'ok',
-        text: out.cancelled ? 'Visit cancelled.' : `Skipped. New visit on ${formatDate(out.replacement_date)}.`,
+        text: out.cancelled ? 'Visit cancelled.' : `Skipped. A make-up clean was added on ${formatDate(out.replacement_date)}.`,
       });
       await load();
     } catch (e) {

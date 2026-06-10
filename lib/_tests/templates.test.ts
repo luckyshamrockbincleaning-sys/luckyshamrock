@@ -70,6 +70,34 @@ describe('doneTemplate', () => {
     expect(t.text.toLowerCase()).toContain('photo');
     expect(t.html.toLowerCase()).toContain('photo');
   });
+
+  it('acts as a receipt: states the charged amount', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'charged', amountCents: 3500 } });
+    expect(t.text).toContain('$35.00');
+    expect(t.html).toContain('$35.00');
+    expect(t.text.toLowerCase()).toContain('charged');
+  });
+
+  it('says a comped clean was free', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'comped' } });
+    expect(t.text.toLowerCase()).toContain('no charge');
+  });
+
+  it('tells the customer when the charge failed', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'failed' } });
+    expect(t.text.toLowerCase()).toContain("couldn't charge");
+    expect(t.text.toLowerCase()).toContain('payment method');
+  });
+
+  it('says nothing about payment when no billing was attempted', () => {
+    for (const t of [
+      doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'none' } }),
+      doneTemplate({ name: 'Sam', nextVisitDate: null }),
+    ]) {
+      expect(t.text.toLowerCase()).not.toContain('charge');
+      expect(t.text).not.toContain('$');
+    }
+  });
 });
 
 describe('all templates produce non-empty html and text', () => {

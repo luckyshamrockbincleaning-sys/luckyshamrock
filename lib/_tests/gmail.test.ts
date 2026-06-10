@@ -105,4 +105,17 @@ describe('buildRfc822Message', () => {
     expect(raw).toContain('Content-Disposition: attachment; filename="clean-bin.jpg"');
     expect(raw).toContain(Buffer.from('fake-image').toString('base64'));
   });
+
+  it('keeps a display-name From header intact ("Lucky Shamrock <addr>")', () => {
+    // sendViaGmail sends with a display name so customers see "Lucky Shamrock"
+    // in their inbox, not the bare mailbox address.
+    const raw = buildRfc822Message({
+      from: '"Lucky Shamrock" <sheasommerfeld@luckyshamrock.ca>',
+      to: 'sam@example.com',
+      subject: 'Hi',
+      text: 'x',
+      html: '<p>x</p>',
+    });
+    expect(raw).toContain('From: "Lucky Shamrock" <sheasommerfeld@luckyshamrock.ca>');
+  });
 });

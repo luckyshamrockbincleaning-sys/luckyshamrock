@@ -26,6 +26,7 @@ import { onOurWayTemplate, doneTemplate } from './email/templates.js';
 import { isStripeConfigured } from './stripe.js';
 import { chargeOffSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
+import { formatFriendlyDate } from './dates.js';
 import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 
@@ -424,12 +425,22 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       }
     }
 
-    // Idempotent on (visitId, 'done').
+    // Idempotent on (visitId, 'done'). The email is the customer's receipt —
+    // it carries the charge outcome and shows the next date in the same
+    // friendly format as the booking confirmation.
+    const emailCharge: NonNullable<Parameters<typeof doneTemplate>[0]['charge']> = !charge.attempted
+      ? { kind: 'none' }
+      : !charge.ok
+        ? { kind: 'failed' }
+        : charge.amount_cents === 0
+          ? { kind: 'comped' }
+          : { kind: 'charged', amountCents: charge.amount_cents };
     const tpl = doneTemplate({
       name: row.name,
-      nextVisitDate,
+      nextVisitDate: nextVisitDate ? formatFriendlyDate(nextVisitDate) : null,
       reviewUrl: process.env.REVIEW_URL || null,
       hasPhoto: !!cleanPhoto.attachment,
+      charge: emailCharge,
     });
     const result = await sendAndLog({
       kind: 'done',

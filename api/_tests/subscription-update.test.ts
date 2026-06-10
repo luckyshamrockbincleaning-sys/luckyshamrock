@@ -80,13 +80,13 @@ describe('POST /api/subscription/:id/update', () => {
   it('cancels future visits and regenerates schedule on cadence change', async () => {
     const { customerId, subId, oldFutureVisitId } = await setup();
     const res = mockRes();
-    await handler(await req(customerId, subId, { cadence: 'quarterly' }), res);
+    await handler(await req(customerId, subId, { cadence: 'seasonal' }), res);
     expect(res.statusCode).toBe(200);
-    expect(res.body.cadence).toBe('quarterly');
+    expect(res.body.cadence).toBe('seasonal');
 
     const db = getDb();
     const [sub] = await db.select().from(subscription).where(eq(subscription.id, subId));
-    expect(sub!.cadence).toBe('quarterly');
+    expect(sub!.cadence).toBe('seasonal');
 
     const [oldV] = await db.select().from(visit).where(eq(visit.id, oldFutureVisitId));
     expect(oldV!.status).toBe('cancelled');
@@ -95,7 +95,21 @@ describe('POST /api/subscription/:id/update', () => {
       .select()
       .from(visit)
       .where(and(eq(visit.subscriptionId, subId), eq(visit.status, 'scheduled')));
-    expect(scheduled).toHaveLength(4); // quarterly target
+    expect(scheduled).toHaveLength(3); // seasonal target
+  });
+
+  it('rejects switching into an unsold legacy cadence (quarterly/bimonthly)', async () => {
+    const { customerId, subId, oldFutureVisitId } = await setup();
+    for (const cadence of ['quarterly', 'bimonthly']) {
+      const res = mockRes();
+      await handler(await req(customerId, subId, { cadence }), res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body.status).toBe('invalid');
+    }
+    // Schedule untouched by the rejected requests.
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, oldFutureVisitId));
+    expect(v!.status).toBe('scheduled');
   });
 
   it('returns 400 when body has neither cadence nor bin_count', async () => {

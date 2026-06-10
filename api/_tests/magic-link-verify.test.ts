@@ -95,11 +95,15 @@ describe('GET /api/magic-link/verify', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 400 when token does not exist', async () => {
+  it('redirects to /manage?link=expired when token does not exist', async () => {
+    // Humans click dead email links — they get the manage sign-in card with a
+    // friendly banner + resend form, not raw JSON.
     const req = mockReq<typeof handler>({ method: 'GET', query: { token: 'nonexistent' } });
     const res = mockResWithHeaders();
     await handler(req, res);
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(307);
+    expect(res.redirected).toBe('/manage?link=expired');
+    expect(res.headers['Set-Cookie']).toBeUndefined(); // no session for a dead link
   });
 
   it('still works when the token was already used (reusable within TTL)', async () => {
@@ -129,13 +133,15 @@ describe('GET /api/magic-link/verify', () => {
     expect(t!.consumedAt!.getTime()).toBe(firstUse.getTime());
   });
 
-  it('returns 400 when token has expired', async () => {
+  it('redirects to /manage?link=expired when token has expired', async () => {
     await makeCustomerAndToken('sam@example.com', 'expired-token', { expiresMinutesFromNow: -1 });
 
     const req = mockReq<typeof handler>({ method: 'GET', query: { token: 'expired-token' } });
     const res = mockResWithHeaders();
     await handler(req, res);
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(307);
+    expect(res.redirected).toBe('/manage?link=expired');
+    expect(res.headers['Set-Cookie']).toBeUndefined(); // no session for a dead link
   });
 
   it('leaves consumed_at null when cookie signing fails', async () => {

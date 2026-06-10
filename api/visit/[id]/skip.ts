@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { addWeeks } from 'date-fns';
 import { getDb } from '../../../db/client.js';
 import { visit, subscription, customer } from '../../../db/schema.js';
@@ -62,8 +62,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    // Replacement = one cadence interval later. Seasonal plans skip to the next
-    // Apr/Jul/Sep window rather than a fixed number of weeks.
+    // Replacement = one cadence interval AFTER THE LAST scheduled visit of this
+    // subscription, not after the skipped one. The schedule is fully generated
+    // up front, so "skipped date + one interval" is exactly the date of the
+    // already-scheduled next visit — anchoring there used to create a duplicate
+    // (two cleans, two charges, same day). Extending the tail keeps the total
+    // visit count and can never collide. Seasonal plans roll to the next
+    // Apr/Jul/Sep window after the tail rather than a fixed number of weeks.
+    const [last] = await db
+      .select({ scheduledFor: visit.scheduledFor })
+      .from(visit)
+      .where(and(eq(visit.subscriptionId, v.subscriptionId), eq(visit.status, 'scheduled')))
+      .orderBy(desc(visit.scheduledFor))
+      .limit(1);
+    const anchor =
+      last && last.scheduledFor.getTime() > v.scheduledFor.getTime() ? last.scheduledFor : v.scheduledFor;
+
     let replacementDate: Date;
     if (sub.cadence === 'seasonal') {
       const [c] = await db.select().from(customer).where(eq(customer.id, customerId));
@@ -71,9 +85,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         res.status(500).json({ status: 'error', message: 'customer row vanished' });
         return;
       }
-      replacementDate = generateSeasonalDates({ startDate: v.scheduledFor, pickupDay: c.pickupDay, count: 1 })[0]!;
+      replacementDate = generateSeasonalDates({ startDate: anchor, pickupDay: c.pickupDay, count: 1 })[0]!;
     } else {
-      replacementDate = addWeeks(v.scheduledFor, CADENCE_WEEKS[sub.cadence]);
+      replacementDate = addWeeks(anchor, CADENCE_WEEKS[sub.cadence]);
     }
 
     await db.transaction(async (tx) => {

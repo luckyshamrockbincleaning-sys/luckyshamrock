@@ -69,6 +69,36 @@ async function setup(opts: { withSubscription?: boolean } = {}): Promise<{ custo
 }
 
 describe('POST /api/visit/:id/skip', () => {
+  it('appends the replacement after the LAST scheduled visit — never a duplicate date', async () => {
+    // Regression: with a fully generated schedule, "skipped date + one interval"
+    // is exactly the next visit's date. Found live 2026-06-10: skipping Jul 16
+    // created a second Aug 13 visit (two cleans, two charges, same day).
+    const { customerId, visitId, subId } = await setup();
+    const db = getDb();
+    // Extend the schedule: Jun 4 (from setup) + Jul 2 + Jul 30.
+    for (const d of ['2026-07-02', '2026-07-30']) {
+      await db.insert(visit).values({
+        id: crypto.randomUUID(),
+        customerId,
+        subscriptionId: subId,
+        scheduledFor: new Date(d),
+      });
+    }
+
+    const res = mockRes();
+    await handler(await req(customerId, visitId), res); // skip Jun 4
+    expect(res.statusCode).toBe(200);
+    expect(res.body.replacement_date).toBe('2026-08-27'); // last (Jul 30) + 28d, NOT Jul 2
+
+    const scheduled = await db
+      .select()
+      .from(visit)
+      .where(and(eq(visit.customerId, customerId), eq(visit.status, 'scheduled')));
+    const dates = scheduled.map((v) => v.scheduledFor.toISOString().slice(0, 10)).sort();
+    expect(dates).toEqual(['2026-07-02', '2026-07-30', '2026-08-27']);
+    expect(new Set(dates).size).toBe(dates.length); // no duplicates
+  });
+
   it('marks the visit skipped and inserts a replacement 4 weeks later for a monthly sub', async () => {
     const { customerId, visitId } = await setup();
     const res = mockRes();

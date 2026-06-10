@@ -15,6 +15,7 @@ import {
   getSavedPaymentMethodFromSetupIntent,
 } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
+import { formatFriendlyDate } from '../lib/dates.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -31,24 +32,6 @@ const paymentSetupRequestSchema = z.object({
   phone: z.string().trim().max(40).optional(),
   postal_code: z.string().trim().min(1).max(10),
 });
-
-/**
- * Format a calendar date ("YYYY-MM-DD") as a friendly human string
- * ("Thu, Jun 11, 2026") for the confirmation email + success screen — matching
- * how /manage renders visit dates. Built from the date parts via Date.UTC so it
- * is timezone-independent (no UTC-midnight off-by-one).
- */
-function formatFriendlyDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return iso;
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-CA', {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}
 
 export default async function handler(
   req: VercelRequest,
