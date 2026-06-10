@@ -33,7 +33,6 @@ export default async function handler(
     res.status(200).json({ status: 'ok' });
   } catch (err) {
     console.error('[waitlist] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }

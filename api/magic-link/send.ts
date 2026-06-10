@@ -50,7 +50,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(token)}`;
     const rendered = magicLinkTemplate({ manageUrl });
 
-    await sendAndLog({
+    // Fire-and-forget the email. Awaiting the Gmail round-trip ONLY in the
+    // email-exists branch is a timing oracle that reveals which addresses are
+    // customers (the not-found branch returns immediately). Detaching the send
+    // makes both branches return after the same fast DB work. The token row is
+    // already persisted; a rare dropped send is recoverable by re-requesting.
+    void sendAndLog({
       kind: 'magic_link',
       to: parsed.data.email,
       subject: rendered.subject,
@@ -58,12 +63,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       html: rendered.html,
       customerId: existing.id,
       visitId: null,
-    });
+    }).catch((err) => console.error('[magic-link/send] email failed', err));
 
     res.status(200).json({ status: 'ok' });
   } catch (err) {
     console.error('[magic-link/send] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }

@@ -50,6 +50,18 @@ describe('POST /api/book — failure modes', () => {
     logSpy.mockRestore();
   });
 
+  it('rejects unsold legacy plans (bimonthly/quarterly) with 400', async () => {
+    for (const plan of ['bimonthly', 'quarterly']) {
+      const req = mockReq<typeof handler>({ method: 'POST', body: { ...validBody, plan } });
+      const res = mockRes<typeof handler>();
+      await handler(req, res);
+      expect(res.statusCode).toBe(400);
+      expect((res.body as any).status).toBe('invalid');
+    }
+    // A crafted request must not be able to create a plan the business doesn't sell.
+    expect(mockValues).not.toHaveBeenCalled();
+  });
+
   it('returns 400 with field errors when body is invalid', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',
@@ -112,6 +124,7 @@ describe('POST /api/book — failure modes', () => {
     expect(res.statusCode).toBe(500);
     const body = res.body as { status: string; message: string };
     expect(body.status).toBe('error');
-    expect(body.message).toBe('connection lost');
+    // The generic 500 body must NOT leak raw driver/internal error detail.
+    expect(body.message).not.toContain('connection lost');
   });
 });

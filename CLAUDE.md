@@ -90,6 +90,14 @@ Pure-validation tests (mocked DB) live in `api/_tests/<endpoint>.failure.test.ts
 
 App-side UUIDs via `crypto.randomUUID()` everywhere. Do not introduce `gen_random_uuid()` or `pgcrypto` without a strong reason.
 
+**500 responses are generic.** Endpoint catch blocks `console.error` the real error server-side but return a fixed `{status:'error', message:'Something went wrong…'}` to the client — never the raw `err.message` (it can leak driver/schema detail). Exceptions: `api/health.ts` (the error string is its documented contract) and the Stripe webhook (Stripe-facing).
+
+**Only sold plans are bookable.** `lib/validation.ts` `planField` accepts `oneoff|monthly|seasonal`. `bimonthly`/`quarterly` stay in the DB `cadence` enum + `Cadence` type for legacy subscriptions, but a crafted `/api/book` cannot create them.
+
+**Client prices have one source.** `/pricing.js` sets `window.LS_PRICING` (dollars), consumed by `components-mid.jsx` + `components-booking.jsx`. `lib/_tests/pricing-sync.test.ts` fails the build if it drifts from `lib/pricing.ts` (cents). Change a price → change `pricing.js` + `lib/pricing.ts` together. (No build step means the client can't import the server module; this is the shared-source workaround.)
+
+**Schema invariants (migration 0005):** partial unique `one_active_sub_per_customer` (one active sub per customer, backs the app-level `already_subscribed` guard); partial `visit_actionable_idx` on `scheduled_for WHERE status IN ('scheduled','heading_there')` (replaced the low-selectivity full `visit_status_idx`); CHECK constraints `payment_amount_non_negative`, `payment_discount_non_negative` (NB: discount may exceed amount on a comp), `visit/subscription_bin_count_positive`. `customer.bin_location` (curb/side/garage/back) is collected at booking and shown on the operator stop card. `payment_status` enum gained `refunded`.
+
 **Test parallelism note:** `vitest.config.ts` sets `poolOptions.forks.singleFork = true` to serialize test files. Integration tests TRUNCATE the shared Neon DB; parallel files race on that. Don't undo this without solving the race a different way (per-file schemas, transactions, etc.).
 
 **Test database isolation (load-bearing):** `npm test` runs against a **separate Neon database** (`neondb_test`), not the production `neondb`. The plumbing:
@@ -132,11 +140,13 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   against `OPERATOR_PASSWORD`. Operator endpoints gate on `getOperatorSession(req)`
   → 401 `{status:'unauthorized'}`. One shared password; no per-user identity.
 - **Routing is single-segment** (`api/operator/[action].ts` → `lib/operator-handlers.ts`).
-  Routes: `login`, `today`, `upcoming`, and `act`. **Visit actions go through
-  `POST /api/operator/act` with body `{id, op, text?}`** where `op` ∈
-  {notify, done, skip, note} — NOT `/api/operator/visit/:id/:action` (multi-segment,
-  404s in prod; see the API-files note above). `handleAct` validates the body and
-  delegates to the per-op handlers, which read the id from `req.query.id`.
+  Routes: `login`, `today`, `upcoming`, `attention`, and `act`. **Visit actions go
+  through `POST /api/operator/act` with body `{id, op, text?}`** where `op` ∈
+  {notify, done, skip, note, retry} — NOT `/api/operator/visit/:id/:action`
+  (multi-segment, 404s in prod; see the API-files note above). `handleAct`
+  validates the body and delegates to the per-op handlers, which read the id from
+  `req.query.id`. `GET /api/operator/attention` lists done visits whose charge
+  failed; `{op:'retry'}` re-charges one (fresh idempotency key per attempt).
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
   `upcoming` returns all future actionable visits after the anchor date, not a
@@ -183,7 +193,25 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   (`api/stripe/webhook.ts` → `lib/billing-webhook.ts`). It needs the RAW body, so
   it sets `export const config = { api: { bodyParser: false } }`. It's the ONE
   Stripe function — **we're at 12/12 on Vercel Hobby.** Adding ANY new function
-  now fails the build; consolidate or upgrade to Pro first.
+  now fails the build; consolidate or upgrade to Pro first. The handler rejects
+  forged/absent signatures with 400 and NEVER calls `applyStripeEvent` in that
+  case (covered by `api/_tests/stripe-webhook.test.ts`).
+- **Webhook events to subscribe in the Stripe dashboard:**
+  `setup_intent.succeeded`, `payment_method.attached`, `payment_intent.succeeded`,
+  `payment_intent.payment_failed`, **and `charge.refunded`** (the last flips the
+  `payment` row + `visit.payment_status` to `refunded`; without it, a dashboard
+  refund leaves the row showing `charged`).
+- **Charge on Done is crash-safe + race-safe.** `handleDone` atomically CLAIMS
+  the visit (`UPDATE ... WHERE id=? AND status IN (actionable) RETURNING`) so two
+  concurrent Done taps can't both charge — the loser gets 409, not a duplicate
+  `payment` 23505 → 500. The `payment` row is inserted as `pending` BEFORE the
+  Stripe call and updated after, so a crash mid-charge still leaves a row for the
+  webhook to reconcile (no charge-without-ledger-row).
+- **Failed charges are surfaced, not silent.** A declined card flags the visit
+  `payment_status='failed'` (never blocks Done) and shows up in: the operator
+  `GET /api/operator/attention` list (with a `{op:'retry'}` re-charge via
+  `/api/operator/act`), and the customer's `/manage` banner (`GET /api/me`
+  returns `payment_alert`).
 - **Card setup is folded into existing functions** to respect the 12-cap.
   Booking uses `POST /api/book` with `{intent:'payment_setup'}` before final
   confirmation; `/manage` still uses `POST /api/me` for replacing the saved card.

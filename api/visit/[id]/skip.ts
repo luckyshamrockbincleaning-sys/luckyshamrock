@@ -89,7 +89,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     res.status(200).json({ status: 'ok', replacement_date: replacementDate.toISOString().slice(0, 10) });
   } catch (err) {
     console.error('[visit/skip] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }

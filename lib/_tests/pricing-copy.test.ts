@@ -9,7 +9,9 @@ describe('public pricing copy', () => {
     expect(pricingCopy).toContain('unit: "per first garbage bin"');
     expect(pricingCopy).toContain('unit: "per first garbage bin · monthly"');
     expect(pricingCopy).toContain('unit: "per first garbage bin · 3 washes/yr"');
-    expect(pricingCopy).toContain('Extra bins are $12 each per clean.');
+    // Extra-bin price now comes from the single source (pricing.js → P); the
+    // dollar value itself is guarded against the server by pricing-sync.test.ts.
+    expect(pricingCopy).toContain('Extra bins are $${P.extraBinPerClean} each per clean.');
 
     expect(pricingCopy).not.toMatch(/10% off/i);
     expect(pricingCopy).not.toContain('unit: "per garbage bin"');
@@ -21,7 +23,7 @@ describe('public pricing copy', () => {
     expect(bookingCopy).toContain('<span>Charged today</span>');
     expect(bookingCopy).toContain('<span>$0</span>');
     expect(bookingCopy).toContain('Card saved before confirmation — charged only after each clean.');
-    expect(bookingCopy).toContain('Math.max(0, bins - 1) * 12');
+    expect(bookingCopy).toContain('Math.max(0, bins - 1) * P.extraBinPerClean');
 
     expect(bookingCopy).not.toContain('<span>Due today</span>');
     expect(bookingCopy).not.toMatch(/deep treatment/i);

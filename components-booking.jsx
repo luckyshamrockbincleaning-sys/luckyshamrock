@@ -126,6 +126,7 @@ const Booking = ({ tweaks }) => {
     city: 'Fort Saskatchewan',
     postalCode: '',
     pickupDay: '',
+    binLocation: 'side',
   });
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
   const [paymentState, setPaymentState] = useStateBk({ phase: 'idle' });
@@ -133,10 +134,16 @@ const Booking = ({ tweaks }) => {
   const elementsRef = useRef(null);
   const paymentSetupRef = useRef(null);
 
+  // Prices come from the single client source (window.LS_PRICING, loaded from
+  // /pricing.js, guarded against lib/pricing.ts by pricing-sync.test.ts). The
+  // inline fallback only applies if that script fails to load.
+  const P = (typeof window !== 'undefined' && window.LS_PRICING) ||
+    { oneoff: 45, monthly: 35, seasonalSeason: 105, seasonalPerWash: 35, extraBinPerClean: 12 };
+
   const services = [
-    { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: 45 },
-    { id: 'monthly', title: 'Monthly', meta: 'Every 4 weeks', price: 35 },
-    { id: 'three-wash', title: 'Three Wash Season', meta: '3 cleans a year', price: 105 },
+    { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: P.oneoff },
+    { id: 'monthly', title: 'Monthly', meta: 'Every 4 weeks', price: P.monthly },
+    { id: 'three-wash', title: 'Three Wash Season', meta: '3 cleans a year', price: P.seasonalSeason },
   ];
 
   const isOneoff = service === 'one-time';
@@ -165,8 +172,8 @@ const Booking = ({ tweaks }) => {
   // (monthly $35, one-off $45, Three Wash Season $35/wash for the first bin,
   // plus $12/clean per extra bin). Nothing is charged at booking: the card is
   // saved now, then charged once the bin is clean.
-  const PER_CLEAN_PRICE = { 'one-time': 45, 'monthly': 35, 'three-wash': 35 };
-  const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) + Math.max(0, bins - 1) * 12;
+  const PER_CLEAN_PRICE = { 'one-time': P.oneoff, 'monthly': P.monthly, 'three-wash': P.seasonalPerWash };
+  const perClean = (PER_CLEAN_PRICE[service] ?? selectedService.price) + Math.max(0, bins - 1) * P.extraBinPerClean;
 
   // One-off → the explicitly chosen calendar date; seasonal → next Apr/Jul/Sep
   // wash; other recurring → first clean derived from pickup day.
@@ -279,6 +286,7 @@ const Booking = ({ tweaks }) => {
       // oneoff_date, but the API still requires a valid pickup_day.
       pickup_day: plan === 'oneoff' ? 'monday' : contact.pickupDay,
       bin_count: bins,
+      bin_location: contact.binLocation,
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
       ...(paymentSetupRef.current ? { payment_setup: paymentSetupRef.current } : {}),
@@ -489,7 +497,16 @@ const Booking = ({ tweaks }) => {
                     <div
                       key={i}
                       className={`cal-day ${d.disabled ? 'disabled' : ''} ${!d.disabled ? 'has-slot' : ''} ${selectedDay === i ? 'selected' : ''}`}
+                      role="button"
+                      tabIndex={d.disabled ? -1 : 0}
+                      aria-disabled={d.disabled}
+                      aria-pressed={selectedDay === i}
+                      aria-label={fmtNice(d.date)}
                       onClick={() => !d.disabled && setSelectedDay(i)}
+                      onKeyDown={(e) => {
+                        if (d.disabled) return;
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDay(i); }
+                      }}
                     >
                       {d.day}
                     </div>
@@ -582,8 +599,12 @@ const Booking = ({ tweaks }) => {
                   </div>
                 </div>
                 <div className="field">
-                  <label>Bin location (so we don't wake the dog)</label>
-                  <select defaultValue="side">
+                  <label htmlFor="bin-location">Bin location (so we don't wake the dog)</label>
+                  <select
+                    id="bin-location"
+                    value={contact.binLocation}
+                    onChange={e => updateContact({...contact, binLocation: e.target.value})}
+                  >
                     <option value="curb">By the curb on service day</option>
                     <option value="side">Side of house / driveway</option>
                     <option value="garage">Inside garage (unlocked)</option>

@@ -406,6 +406,16 @@ function ManageApp() {
         <LoginCard />
       ) : (
         <>
+          {state.me.payment_alert && (
+            <div className="manage-card" style={{ borderLeft: '4px solid #c0392b', background: '#fbeaea' }}>
+              <h2 style={{ color: '#7A2222' }}>Payment needs attention</h2>
+              <p className="muted" style={{ marginBottom: 0 }}>
+                A recent clean couldn't be charged to your card
+                {state.me.payment_alert.failed_count > 1 ? ` (${state.me.payment_alert.failed_count} cleans)` : ''}.
+                Please update your card below so we can collect for it — your service continues either way.
+              </p>
+            </div>
+          )}
           <CustomerCard customer={state.me.customer} />
           {state.me.subscription && (
             <SubscriptionCard

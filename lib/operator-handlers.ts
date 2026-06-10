@@ -3,13 +3,14 @@
  *
  * Vercel Hobby allows at most 12 serverless functions per deployment. To keep
  * all operator routes in a single function, the real handler logic lives here
- * as named exports and the catch-all route `api/operator/[...path].ts`
- * dispatches to them. Each is a plain (req, res) handler — testable directly,
+ * as named exports and the single-segment route `api/operator/[action].ts`
+ * dispatches to them. (A catch-all `[...path]` 404'd in the Vercel runtime — see
+ * that file's header.) Each is a plain (req, res) handler — testable directly,
  * no routing layer in the way.
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, gt, inArray, asc, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, payment } from '../db/schema.js';
 import {
@@ -39,7 +40,7 @@ const CLEAN_PHOTO_MIME_TO_EXT: Record<string, string> = {
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
 const actSchema = z
-  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note']) })
+  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note', 'retry']) })
   .passthrough(); // keep `text` through for the note op
 const cleanPhotoSchema = z.object({
   filename: z.string().trim().min(1).max(160).optional(),
@@ -61,6 +62,7 @@ const stopColumns = {
   street: customer.street,
   city: customer.city,
   postalCode: customer.postalCode,
+  binLocation: customer.binLocation,
   // One-offs store bin_count on the visit; recurring derive it from the
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
@@ -123,8 +125,7 @@ export async function handleLogin(req: VercelRequest, res: VercelResponse): Prom
     res.status(200).json({ status: 'ok' });
   } catch (err) {
     console.error('[operator/login] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -157,8 +158,7 @@ export async function handleToday(req: VercelRequest, res: VercelResponse): Prom
     res.status(200).json({ status: 'ok', date: targetISO, visits: rows.map(toOperatorVisit) });
   } catch (err) {
     console.error('[operator/today] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -196,8 +196,7 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
     res.status(200).json({ status: 'ok', visits: rows.map(toOperatorVisit) });
   } catch (err) {
     console.error('[operator/upcoming] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -263,8 +262,7 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
     res.status(200).json({ status: 'ok', skipped: result.skipped ?? false });
   } catch (err) {
     console.error('[operator/visit/notify] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -323,6 +321,21 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       return;
     }
 
+    // Atomically CLAIM the visit: flip scheduled/heading_there → done in one
+    // UPDATE guarded by the status. The read-check above can race a second
+    // concurrent Done tap; this claim cannot — only one UPDATE matches, so the
+    // loser gets 0 rows back and bails before charging (no double-charge, no
+    // duplicate-payment 500).
+    const claimed = await db
+      .update(visit)
+      .set({ status: 'done', doneAt: new Date() })
+      .where(and(eq(visit.id, visitId), inArray(visit.status, ACTIONABLE_VISIT_STATUSES)))
+      .returning({ id: visit.id });
+    if (claimed.length === 0) {
+      res.status(409).json({ status: 'not_actionable', message: 'visit is already done' });
+      return;
+    }
+
     // Next clean = the customer's next still-scheduled visit after this date.
     const [next] = await db
       .select({ scheduledFor: visit.scheduledFor })
@@ -337,8 +350,6 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       .orderBy(asc(visit.scheduledFor))
       .limit(1);
     const nextVisitDate = next ? next.scheduledFor.toISOString().slice(0, 10) : null;
-
-    await db.update(visit).set({ status: 'done', doneAt: new Date() }).where(eq(visit.id, visitId));
 
     // ── Charge the card on file (best-effort) ───────────────────────────────
     // Only charge once per visit (skip if already charged/comped) and only when
@@ -376,6 +387,19 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         charge = { attempted: true, ok: true, amount_cents: 0 };
       } else {
         charge.attempted = true;
+        // Record the ledger row as `pending` BEFORE calling Stripe. If the
+        // function dies between the charge and recording its result, a row still
+        // exists for the webhook (payment_intent.succeeded/failed) to reconcile —
+        // no successful charge with no local record.
+        const paymentId = crypto.randomUUID();
+        await db.insert(payment).values({
+          id: paymentId,
+          customerId: row.customerId,
+          visitId,
+          amountCents: amount,
+          discountCents,
+          status: 'pending',
+        });
         const result = await chargeOffSession({
           stripeCustomerId: row.stripeCustomerId,
           paymentMethodId: row.defaultPaymentMethodId,
@@ -383,16 +407,15 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           description: `Lucky Shamrock clean — ${row.scheduledFor.toISOString().slice(0, 10)}`,
           idempotencyKey: `visit-${visitId}-charge`,
         });
-        await db.insert(payment).values({
-          id: crypto.randomUUID(),
-          customerId: row.customerId,
-          visitId,
-          stripePaymentIntentId: result.paymentIntentId ?? null,
-          amountCents: amount,
-          discountCents,
-          status: result.ok ? 'succeeded' : 'failed',
-          failureReason: result.ok ? null : (result.error ?? 'charge_failed'),
-        });
+        await db
+          .update(payment)
+          .set({
+            stripePaymentIntentId: result.paymentIntentId ?? null,
+            status: result.ok ? 'succeeded' : 'failed',
+            failureReason: result.ok ? null : (result.error ?? 'charge_failed'),
+            updatedAt: new Date(),
+          })
+          .where(eq(payment.id, paymentId));
         await db
           .update(visit)
           .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
@@ -427,8 +450,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     });
   } catch (err) {
     console.error('[operator/visit/done] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -469,8 +491,7 @@ export async function handleSkip(req: VercelRequest, res: VercelResponse): Promi
     res.status(200).json({ status: 'ok' });
   } catch (err) {
     console.error('[operator/visit/skip] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -511,8 +532,176 @@ export async function handleNote(req: VercelRequest, res: VercelResponse): Promi
     res.status(200).json({ status: 'ok', notes: newNotes });
   } catch (err) {
     console.error('[operator/visit/note] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GET /api/operator/attention  → visits whose charge FAILED (need a retry)
+//
+// A declined card never blocks "Done", so failed charges would otherwise vanish.
+// This is the operator's "money owed" surface: done visits still flagged
+// payment_status='failed', newest first, with contact + the amount + reason.
+// ─────────────────────────────────────────────────────────────────────
+export async function handleAttention(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  try {
+    const db = getDb();
+    const rows = await db
+      .select({
+        id: visit.id,
+        scheduledFor: visit.scheduledFor,
+        doneAt: visit.doneAt,
+        amountCents: payment.amountCents,
+        failureReason: payment.failureReason,
+        name: customer.name,
+        phone: customer.phone,
+        street: customer.street,
+        city: customer.city,
+        postalCode: customer.postalCode,
+        hasCard: customer.defaultPaymentMethodId,
+      })
+      .from(visit)
+      .innerJoin(customer, eq(visit.customerId, customer.id))
+      .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'failed')))
+      .where(eq(visit.paymentStatus, 'failed'))
+      .orderBy(desc(visit.doneAt), desc(payment.createdAt));
+
+    // A visit can carry >1 failed payment row after retries — keep the newest per visit.
+    const seen = new Set<string>();
+    const visits: unknown[] = [];
+    for (const r of rows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      visits.push({
+        id: r.id,
+        scheduled_for: r.scheduledFor,
+        amount_cents: r.amountCents ?? null,
+        failure_reason: r.failureReason ?? null,
+        has_card: Boolean(r.hasCard),
+        customer: { name: r.name, phone: r.phone, street: r.street, city: r.city, postal_code: r.postalCode },
+      });
+    }
+    res.status(200).json({ status: 'ok', visits });
+  } catch (err) {
+    console.error('[operator/attention] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/act {op:'retry'}  → re-charge a visit whose card declined
+// ─────────────────────────────────────────────────────────────────────
+export async function handleRetry(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const visitId = typeof req.query.id === 'string' ? req.query.id : null;
+  if (!visitId) {
+    res.status(400).json({ status: 'invalid', message: 'missing visit id' });
+    return;
+  }
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        paymentStatus: visit.paymentStatus,
+        scheduledFor: visit.scheduledFor,
+        visitBinCount: visit.binCount,
+        subId: visit.subscriptionId,
+        customerId: visit.customerId,
+        stripeCustomerId: customer.stripeCustomerId,
+        defaultPaymentMethodId: customer.defaultPaymentMethodId,
+      })
+      .from(visit)
+      .innerJoin(customer, eq(visit.customerId, customer.id))
+      .where(eq(visit.id, visitId));
+
+    if (!row) {
+      res.status(404).json({ status: 'not_found' });
+      return;
+    }
+    if (row.paymentStatus !== 'failed') {
+      res.status(409).json({ status: 'not_failed', message: `visit payment is ${row.paymentStatus}` });
+      return;
+    }
+    if (!isStripeConfigured() || !row.stripeCustomerId || !row.defaultPaymentMethodId) {
+      res.status(422).json({ status: 'no_card', message: 'No card on file to retry.' });
+      return;
+    }
+
+    // Re-charge the amount of the last failed attempt (preserves the original
+    // on-the-spot discount); fall back to recomputing the base if none exists.
+    const [lastFailed] = await db
+      .select()
+      .from(payment)
+      .where(and(eq(payment.visitId, visitId), eq(payment.status, 'failed')))
+      .orderBy(desc(payment.createdAt))
+      .limit(1);
+    let amount = lastFailed?.amountCents ?? null;
+    let discount = lastFailed?.discountCents ?? 0;
+    if (amount === null) {
+      let cadence: Cadence | null = null;
+      let binCount = row.visitBinCount ?? 1;
+      if (row.subId) {
+        const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
+        cadence = (sub?.cadence as Cadence) ?? null;
+        binCount = sub?.binCount ?? binCount;
+      }
+      amount = finalChargeCents(baseChargeCents(cadence, binCount), 0);
+      discount = 0;
+    }
+
+    const paymentId = crypto.randomUUID();
+    await db.insert(payment).values({
+      id: paymentId,
+      customerId: row.customerId,
+      visitId,
+      amountCents: amount,
+      discountCents: discount,
+      status: 'pending',
+    });
+    const result = await chargeOffSession({
+      stripeCustomerId: row.stripeCustomerId,
+      paymentMethodId: row.defaultPaymentMethodId,
+      amountCents: amount,
+      description: `Lucky Shamrock clean (retry) — ${row.scheduledFor.toISOString().slice(0, 10)}`,
+      // Fresh key per retry — a deterministic key would just replay the decline.
+      idempotencyKey: `visit-${visitId}-retry-${paymentId}`,
+    });
+    await db
+      .update(payment)
+      .set({
+        stripePaymentIntentId: result.paymentIntentId ?? null,
+        status: result.ok ? 'succeeded' : 'failed',
+        failureReason: result.ok ? null : (result.error ?? 'charge_failed'),
+        updatedAt: new Date(),
+      })
+      .where(eq(payment.id, paymentId));
+    await db
+      .update(visit)
+      .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
+      .where(eq(visit.id, visitId));
+
+    res.status(200).json({
+      status: 'ok',
+      charge: { ok: result.ok, amount_cents: amount, error: result.ok ? undefined : result.error },
+    });
+  } catch (err) {
+    console.error('[operator/retry] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
 
@@ -530,6 +719,7 @@ const ACT_HANDLERS: Record<string, (req: VercelRequest, res: VercelResponse) => 
   done: handleDone,
   skip: handleSkip,
   note: handleNote,
+  retry: handleRetry,
 };
 
 export async function handleAct(req: VercelRequest, res: VercelResponse): Promise<void> {

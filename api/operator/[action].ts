@@ -3,6 +3,7 @@ import {
   handleLogin,
   handleToday,
   handleUpcoming,
+  handleAttention,
   handleAct,
 } from '../../lib/operator-handlers.js';
 
@@ -12,7 +13,8 @@ import {
  *   POST /api/operator/login
  *   GET  /api/operator/today
  *   GET  /api/operator/upcoming
- *   POST /api/operator/act      ← visit actions; body {id, op, text?}
+ *   GET  /api/operator/attention ← done visits whose charge failed
+ *   POST /api/operator/act      ← visit actions; body {id, op, text?} (op includes retry)
  *
  * Why one segment: in the Vercel runtime a catch-all `[...path]` route 404'd at
  * the platform for any 2+/-segment URL (e.g. /visit/:id/:action) — the function
@@ -26,6 +28,7 @@ const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promi
   login: handleLogin,
   today: handleToday,
   upcoming: handleUpcoming,
+  attention: handleAttention,
   act: handleAct,
 };
 

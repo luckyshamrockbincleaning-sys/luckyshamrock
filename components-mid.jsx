@@ -140,24 +140,28 @@ const HowItWorks = ({ onBookClick }) => {
 
 // ===== Pricing =====
 const Pricing = ({ tweaks, onBookClick }) => {
+  // Prices from the single client source (window.LS_PRICING / pricing.js,
+  // guarded against lib/pricing.ts). Inline fallback only if the script fails.
+  const P = (typeof window !== 'undefined' && window.LS_PRICING) ||
+    { oneoff: 45, monthly: 35, seasonalSeason: 105, seasonalPerWash: 35, extraBinPerClean: 12 };
   const current = [
     {
       name: "One-Time",
       sub: "Try us once. Smell the difference.",
-      price: 45, unit: "per first garbage bin",
+      price: P.oneoff, unit: "per first garbage bin",
       features: ["1 garbage bin · hot-water clean", "Eco-deodorize + towel dry", "Photo proof on completion", "No commitment"],
     },
     {
       name: "Monthly",
       sub: "The neighborhood favorite.",
-      price: 35, unit: "per first garbage bin · monthly",
-      features: ["1 garbage bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", "Extra bins $12/clean"],
+      price: P.monthly, unit: "per first garbage bin · monthly",
+      features: ["1 garbage bin · every 4 weeks", "Trash-day timing automatic", "Priority reschedule", "Cancel anytime, no fee", `Extra bins $${P.extraBinPerClean}/clean`],
       featured: true,
     },
     {
       name: "Three Wash Season",
       sub: "Fresh through every season.",
-      price: 105, unit: "per first garbage bin · 3 washes/yr",
+      price: P.seasonalSeason, unit: "per first garbage bin · 3 washes/yr",
       features: [
         "Apr/May — start the season fresh",
         "Jul/Aug — keep clean through the heat",
@@ -200,7 +204,7 @@ const Pricing = ({ tweaks, onBookClick }) => {
         </div>
 
         <p style={{marginTop: 40, color: 'var(--ink-3)', fontSize: 14}}>
-          Extra bins are $12 each per clean. Service area: {tweaks.city}. Prices include tax.
+          {`Extra bins are $${P.extraBinPerClean} each per clean.`} Service area: {tweaks.city}. Prices include tax.
         </p>
       </div>
     </section>

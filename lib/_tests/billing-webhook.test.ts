@@ -94,6 +94,33 @@ describe('applyStripeEvent', () => {
     expect(v!.paymentStatus).toBe('failed');
   });
 
+  it('charge.refunded marks the payment + visit as refunded', async () => {
+    const cid = await makeCustomer('cus_refund');
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_refunded');
+    // Start from a settled charge, then refund it from the dashboard.
+    const db = getDb();
+    await db.update(payment).set({ status: 'succeeded' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'charged' }).where(eq(visit.id, visitId));
+
+    const tag = await applyStripeEvent({
+      type: 'charge.refunded',
+      data: { object: { id: 'ch_1', payment_intent: 'pi_refunded', refunded: true } },
+    });
+    expect(tag).toBe('charge.refunded:applied');
+    const [p] = await db.select().from(payment).where(eq(payment.id, paymentId));
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(p!.status).toBe('refunded');
+    expect(v!.paymentStatus).toBe('refunded');
+  });
+
+  it('charge.refunded for an unknown intent is a safe no-op', async () => {
+    const tag = await applyStripeEvent({
+      type: 'charge.refunded',
+      data: { object: { id: 'ch_x', payment_intent: 'pi_nonexistent', refunded: true } },
+    });
+    expect(tag).toBe('charge.refunded:no_row');
+  });
+
   it('ignores unknown event types', async () => {
     const tag = await applyStripeEvent({ type: 'invoice.created', data: { object: {} } });
     expect(tag).toBe('ignored');

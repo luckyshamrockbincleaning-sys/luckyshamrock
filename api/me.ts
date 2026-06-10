@@ -63,8 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(200).json({ status: 'ok', client_secret: setup.clientSecret, publishable_key: setup.publishableKey });
     } catch (err) {
       console.error('[me:setup] failed', err);
-      const message = err instanceof Error ? err.message : 'unknown_error';
-      res.status(500).json({ status: 'error', message });
+      res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
     }
     return;
   }
@@ -149,6 +148,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       )
       .orderBy(asc(visit.scheduledFor));
 
+    // Surface any clean whose card charge failed so /manage can prompt the
+    // customer to update their card (a declined charge never blocks the clean,
+    // so this is the only place they'd find out).
+    const failedVisits = await db
+      .select({ id: visit.id })
+      .from(visit)
+      .where(and(eq(visit.customerId, customerId), eq(visit.paymentStatus, 'failed')));
+
     res.status(200).json({
       status: 'ok',
       customer: {
@@ -179,10 +186,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         subscription_id: v.subscriptionId,
         notes: v.notes,
       })),
+      payment_alert: failedVisits.length > 0 ? { failed_count: failedVisits.length } : null,
     });
   } catch (err) {
     console.error('[me] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
