@@ -849,6 +849,9 @@ footer::before { background: var(--green-darker); }
 .field input:focus, .field select:focus {
   outline: none;
   border-color: var(--green);
+  /* Visible focus ring for keyboard users (WCAG 2.4.7) — a border-color change
+     alone is too subtle. */
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.30);
 }
 
 .service-options {
@@ -916,6 +919,11 @@ footer::before { background: var(--green-darker); }
 .cal-day:hover:not(.disabled) {
   background: var(--green-soft);
   border-color: var(--green);
+}
+.cal-day:focus-visible {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.35);
 }
 .cal-day.selected {
   background: var(--green);

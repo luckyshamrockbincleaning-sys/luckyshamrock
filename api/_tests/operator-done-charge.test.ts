@@ -168,4 +168,38 @@ describe('operator Done — auto-charge', () => {
     await handler(await req(), res);
     expect(mockCharge).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 4500 }));
   });
+
+  it('two concurrent Done taps charge once — the loser gets 409, not a 500', async () => {
+    mockCharge.mockResolvedValue({ ok: true, paymentIntentId: 'pi_race', status: 'succeeded' });
+    const visitId = await seed({ withCard: true, cadence: 'monthly', binCount: 1 });
+    const res1 = mockRes();
+    const res2 = mockRes();
+    await Promise.all([handler(await req(), res1), handler(await req(), res2)]);
+
+    const codes = [res1.statusCode, res2.statusCode].sort();
+    expect(codes).toEqual([200, 409]); // one wins, one is not_actionable — never a 500
+    expect(mockCharge).toHaveBeenCalledTimes(1);
+
+    const db = getDb();
+    const pays = await db.select().from(payment).where(eq(payment.visitId, visitId));
+    expect(pays).toHaveLength(1);
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(v!.status).toBe('done');
+    expect(v!.paymentStatus).toBe('charged');
+  });
+
+  it('leaves a pending ledger row when the charge call throws mid-flight', async () => {
+    // chargeOffSession normally never throws, but if the function dies between
+    // the Stripe call and recording the result, a pending row must already exist
+    // so the webhook can reconcile (no charge-without-ledger-row).
+    mockCharge.mockRejectedValueOnce(new Error('network blip'));
+    const visitId = await seed({ withCard: true, cadence: 'monthly', binCount: 1 });
+    const res = mockRes();
+    await handler(await req(), res);
+
+    const db = getDb();
+    const pays = await db.select().from(payment).where(eq(payment.visitId, visitId));
+    expect(pays).toHaveLength(1);
+    expect(pays[0]!.status).toBe('pending');
+  });
 });

@@ -57,6 +57,7 @@ export async function truncateAllForTests(): Promise<void> {
   }
   const sql = getRawClient();
   await sql`TRUNCATE
+    payment,
     notification_log,
     magic_link_token,
     visit,

@@ -125,6 +125,7 @@ export interface OperatorVisitRow {
   street: string;
   city: string;
   postalCode: string;
+  binLocation: string | null;
   binCount: number | null;
 }
 
@@ -138,6 +139,7 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     street: r.street,
     city: r.city,
     postal_code: r.postalCode,
+    bin_location: r.binLocation,
     bin_count: r.binCount,
     status: r.status,
     payment_status: r.paymentStatus,

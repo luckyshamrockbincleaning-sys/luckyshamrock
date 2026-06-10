@@ -115,8 +115,7 @@ export default async function handler(
       });
     } catch (err) {
       console.error('[book:payment_setup] failed', err);
-      const message = err instanceof Error ? err.message : 'unknown_error';
-      res.status(500).json({ status: 'error', message });
+      res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
     }
     return;
   }
@@ -246,6 +245,7 @@ export default async function handler(
           city: data.city,
           postalCode: normalizePostalCode(data.postal_code),
           pickupDay: data.pickup_day,
+          binLocation: data.bin_location ?? null,
           stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
           defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
         });
@@ -259,6 +259,7 @@ export default async function handler(
             city: data.city,
             postalCode: normalizePostalCode(data.postal_code),
             pickupDay: data.pickup_day,
+            binLocation: data.bin_location ?? null,
             ...(verifiedPaymentSetup
               ? {
                   stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
@@ -350,7 +351,6 @@ export default async function handler(
       return;
     }
     console.error('[book] failed', err);
-    const message = err instanceof Error ? err.message : 'unknown_error';
-    res.status(500).json({ status: 'error', message });
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }

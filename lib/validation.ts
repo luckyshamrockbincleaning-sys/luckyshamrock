@@ -8,7 +8,10 @@ const emailField = z
 
 const pickupDay = z.enum(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']);
 const cadence = z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']);
-const planField = z.enum(['oneoff', 'monthly', 'bimonthly', 'quarterly', 'seasonal']);
+// Only the plans we actually SELL are bookable. bimonthly/quarterly remain in the
+// DB enum + Cadence type for legacy subscriptions, but the public booking
+// endpoint must not let a crafted request create an unsold plan.
+const planField = z.enum(['oneoff', 'monthly', 'seasonal']);
 const binCount = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const paymentSetup = z.object({
   stripe_customer_id: z.string().trim().min(1),
@@ -51,6 +54,7 @@ export const bookRequestSchema = z
     postal_code: z.string().trim().min(1).max(10),
     pickup_day: pickupDay,
     bin_count: binCount,
+    bin_location: z.enum(['curb', 'side', 'garage', 'back']).optional(),
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
     payment_setup: paymentSetup.optional(),

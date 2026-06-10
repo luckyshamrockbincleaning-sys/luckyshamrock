@@ -8,8 +8,11 @@ import {
   pgEnum,
   uuid,
   unique,
+  uniqueIndex,
   index,
+  check,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 // ─────────────────────────────────────────────────────────────────────
 // Enums
@@ -58,6 +61,7 @@ export const paymentStatusEnum = pgEnum('payment_status', [
   'charged', // successfully charged
   'comped', // intentionally not charged (full discount / freebie)
   'failed', // charge attempted and declined — needs retry / another method
+  'refunded', // charge was refunded (e.g. from the Stripe dashboard)
 ]);
 
 // Lifecycle of a single payment attempt (Phase 6 — Stripe).
@@ -83,6 +87,9 @@ export const customer = pgTable(
     city: text('city').notNull(),
     postalCode: varchar('postal_code', { length: 10 }).notNull(),
     pickupDay: pickupDayEnum('pickup_day').notNull(),
+    // Where the operator can find the bin on service day (curb / side / garage /
+    // back). Collected at booking; nullable for legacy rows.
+    binLocation: text('bin_location'),
     notes: text('notes'),
     // Stripe billing identifiers (Phase 6). Null until the customer saves a card.
     stripeCustomerId: text('stripe_customer_id'),
@@ -110,6 +117,13 @@ export const subscription = pgTable(
   },
   (t) => ({
     customerIdx: index('subscription_customer_idx').on(t.customerId),
+    // At most one ACTIVE subscription per customer. Backs the app-level
+    // "already_subscribed" guard so a concurrent double-submit can't create
+    // two active plans (and two sets of billable visits).
+    oneActiveSubPerCustomer: uniqueIndex('one_active_sub_per_customer')
+      .on(t.customerId)
+      .where(sql`status = 'active'`),
+    binCountPositive: check('subscription_bin_count_positive', sql`${t.binCount} > 0`),
   }),
 );
 
@@ -140,7 +154,17 @@ export const visit = pgTable(
     customerIdx: index('visit_customer_idx').on(t.customerId),
     subscriptionIdx: index('visit_subscription_idx').on(t.subscriptionId),
     scheduledForIdx: index('visit_scheduled_for_idx').on(t.scheduledFor),
-    statusIdx: index('visit_status_idx').on(t.status),
+    // Partial index matching the operator "actionable stops" predicate exactly
+    // (today + upcoming queries filter scheduled_for + status IN actionable).
+    // Far smaller and more selective than the old full visit_status_idx, which
+    // skewed toward 'done' over time and was never selective enough to be chosen.
+    actionableIdx: index('visit_actionable_idx')
+      .on(t.scheduledFor)
+      .where(sql`status in ('scheduled', 'heading_there')`),
+    binCountPositive: check(
+      'visit_bin_count_positive',
+      sql`${t.binCount} is null or ${t.binCount} > 0`,
+    ),
   }),
 );
 
@@ -214,5 +238,10 @@ export const payment = pgTable(
     visitIdx: index('payment_visit_idx').on(t.visitId),
     // A given PaymentIntent maps to exactly one payment row (idempotent webhooks).
     intentUnique: unique('payment_intent_unique').on(t.stripePaymentIntentId),
+    // Amounts are non-negative. NOTE: discount can exceed amount (a comped visit
+    // stores amount_cents=0 with the full discount_cents), so we do NOT constrain
+    // discount <= amount — only that neither goes negative.
+    amountNonNegative: check('payment_amount_non_negative', sql`${t.amountCents} >= 0`),
+    discountNonNegative: check('payment_discount_non_negative', sql`${t.discountCents} >= 0`),
   }),
 );

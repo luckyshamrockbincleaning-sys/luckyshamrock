@@ -61,6 +61,20 @@ describe('POST /api/book — happy path', () => {
     expect(visits.every((v) => v.binCount === null)).toBe(true);
   });
 
+  it('persists the bin location on the customer so the operator knows where to find the bin', async () => {
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: { ...validBody, plan: 'monthly', bin_location: 'garage' },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [c] = await db.select().from(customer).where(eq(customer.email, 'sam@example.com'));
+    expect(c!.binLocation).toBe('garage');
+  });
+
   it('creates a seasonal (Three Wash Season) subscription with 3 visits in Apr/Jul/Sep', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',

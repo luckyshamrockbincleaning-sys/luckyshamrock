@@ -36,6 +36,13 @@
       "when": 1780411129456,
       "tag": "0004_calm_the_captain",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781034882859,
+      "tag": "0005_premium_nebula",
+      "breakpoints": true
     }
   ]
 }

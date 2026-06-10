@@ -13,8 +13,8 @@ export interface RenderedEmail {
   text: string;
 }
 
-const FOOTER_HTML = '<p style="color:#888;font-size:12px;margin-top:32px">Lucky Shamrock Bin Cleaning · Fort Saskatchewan</p>';
-const FOOTER_TEXT = '--\nLucky Shamrock Bin Cleaning · Fort Saskatchewan';
+const FOOTER_HTML = '<p style="color:#888;font-size:12px;margin-top:32px">Lucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan</p>';
+const FOOTER_TEXT = '--\nLucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan';
 
 export function bookingConfirmedTemplate(p: {
   name: string;

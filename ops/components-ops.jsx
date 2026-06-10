@@ -80,6 +80,13 @@ const PAY_BADGE = {
   comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
 };
 
+const BIN_LOCATION_LABEL = {
+  curb: 'By the curb',
+  side: 'Side of house / driveway',
+  garage: 'In garage (unlocked)',
+  back: 'Back yard / behind gate',
+};
+
 const CLEAN_PHOTO_MAX_SIDE = 1600;
 const CLEAN_PHOTO_QUALITY = 0.78;
 
@@ -179,6 +186,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
 
       <div className="ops-meta">
         <span>{bins}</span>
+        {stop.bin_location && <span>📍 {BIN_LOCATION_LABEL[stop.bin_location] || stop.bin_location}</span>}
         {stop.phone && <a className="ops-phone" href={`tel:${stop.phone}`}>{stop.phone}</a>}
       </div>
 
@@ -245,16 +253,45 @@ function StopCard({ stop, onAction, busy, showDate }) {
   );
 }
 
+function AttentionCard({ item, onAction, busy }) {
+  const amt = item.amount_cents != null ? `$${(item.amount_cents / 100).toFixed(2)}` : '—';
+  return (
+    <div className="ops-card">
+      <div className="ops-card-head">
+        <div>
+          <div className="ops-date">{formatDate(item.scheduled_for)}</div>
+          <div className="ops-name">{item.customer.name}</div>
+          <div className="ops-addr">{item.customer.street}, {item.customer.city} {item.customer.postal_code}</div>
+        </div>
+        <span className="visit-status" style={{ background: '#F5DADA', color: '#7A2222' }}>⚠ card failed</span>
+      </div>
+      <div className="ops-meta">
+        <span>Owed {amt}</span>
+        {item.customer.phone && <a className="ops-phone" href={`tel:${item.customer.phone}`}>{item.customer.phone}</a>}
+      </div>
+      {item.failure_reason && <div className="ops-notes">{item.failure_reason}</div>}
+      <div className="ops-actions">
+        <button className="btn btn-primary ops-btn" disabled={busy || !item.has_card} onClick={() => onAction('retry', item)}>
+          {item.has_card ? 'Retry charge' : 'No card on file'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OpsApp() {
   const [authed, setAuthed] = useState(null); // null = unknown, true, false
-  const [view, setView] = useState('today'); // 'today' | 'upcoming'
+  const [view, setView] = useState('today'); // 'today' | 'upcoming' | 'attention'
   const [data, setData] = useState({ loading: true, stops: [], date: null });
   const [flash, setFlash] = useState({ kind: '', text: '' });
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (which) => {
     setData((d) => ({ ...d, loading: true }));
-    const url = which === 'upcoming' ? '/api/operator/upcoming' : '/api/operator/today';
+    const url =
+      which === 'upcoming' ? '/api/operator/upcoming'
+      : which === 'attention' ? '/api/operator/attention'
+      : '/api/operator/today';
     try {
       const r = await fetch(url, { credentials: 'same-origin' });
       if (r.status === 401) {
@@ -326,6 +363,14 @@ function OpsApp() {
         setFlash({ kind: 'ok', text: `Skipped ${stop.customer_name}.` });
       } else if (action === 'note') {
         setFlash({ kind: 'ok', text: 'Note saved.' });
+      } else if (action === 'retry') {
+        const c = j.charge;
+        setFlash({
+          kind: c?.ok ? 'ok' : 'err',
+          text: c?.ok
+            ? `Charged $${(c.amount_cents / 100).toFixed(2)} — paid up.`
+            : `Still declined${c?.error ? ': ' + c.error : ''}.`,
+        });
       }
       await load(view);
     } catch (e) {
@@ -358,7 +403,7 @@ function OpsApp() {
   return (
     <div className="ops-shell">
       <div className="ops-header">
-        <h1>{view === 'today' ? "Today's route" : 'All upcoming'}</h1>
+        <h1>{view === 'today' ? "Today's route" : view === 'attention' ? 'Needs attention' : 'All upcoming'}</h1>
         <a className="brand" href="/">Lucky Shamrock</a>
       </div>
 
@@ -369,6 +414,9 @@ function OpsApp() {
         <button className={view === 'upcoming' ? 'active' : ''} onClick={() => setView('upcoming')}>
           All upcoming
         </button>
+        <button className={view === 'attention' ? 'active' : ''} onClick={() => setView('attention')}>
+          Needs attention
+        </button>
       </div>
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
@@ -377,8 +425,16 @@ function OpsApp() {
         <div className="ops-card"><p>Loading…</p></div>
       ) : data.stops.length === 0 ? (
         <div className="ops-card">
-          <p className="muted">{view === 'today' ? 'No stops scheduled today.' : 'Nothing booked after today.'}</p>
+          <p className="muted">
+            {view === 'today' ? 'No stops scheduled today.'
+              : view === 'attention' ? 'No failed charges — all paid up. 🍀'
+              : 'Nothing booked after today.'}
+          </p>
         </div>
+      ) : view === 'attention' ? (
+        data.stops.map((s) => (
+          <AttentionCard key={s.id} item={s} onAction={onAction} busy={busy} />
+        ))
       ) : (
         data.stops.map((s) => (
           <StopCard key={s.id} stop={s} onAction={onAction} busy={busy} showDate={view === 'upcoming'} />

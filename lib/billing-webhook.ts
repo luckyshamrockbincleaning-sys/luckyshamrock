@@ -82,6 +82,22 @@ export async function applyStripeEvent(event: {
       return p ? 'payment_intent.payment_failed:applied' : 'payment_intent.payment_failed:no_row';
     }
 
+    // A charge was refunded (e.g. from the Stripe dashboard). Flag the payment
+    // row + its visit as refunded so the ledger and reconciliation stay correct.
+    case 'charge.refunded': {
+      const piId = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+      if (!piId) return 'charge.refunded:missing_id';
+      const [p] = await db
+        .update(payment)
+        .set({ status: 'refunded', updatedAt: new Date() })
+        .where(eq(payment.stripePaymentIntentId, piId))
+        .returning();
+      if (p?.visitId) {
+        await db.update(visit).set({ paymentStatus: 'refunded' }).where(eq(visit.id, p.visitId));
+      }
+      return p ? 'charge.refunded:applied' : 'charge.refunded:no_row';
+    }
+
     default:
       return 'ignored';
   }
