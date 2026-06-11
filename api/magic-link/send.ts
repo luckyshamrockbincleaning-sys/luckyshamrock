@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { waitUntil } from '@vercel/functions';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../../db/client.js';
@@ -50,20 +51,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const manageUrl = `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(token)}`;
     const rendered = magicLinkTemplate({ manageUrl });
 
-    // Fire-and-forget the email. Awaiting the Gmail round-trip ONLY in the
-    // email-exists branch is a timing oracle that reveals which addresses are
-    // customers (the not-found branch returns immediately). Detaching the send
-    // makes both branches return after the same fast DB work. The token row is
-    // already persisted; a rare dropped send is recoverable by re-requesting.
-    void sendAndLog({
-      kind: 'magic_link',
-      to: parsed.data.email,
-      subject: rendered.subject,
-      body: rendered.text,
-      html: rendered.html,
-      customerId: existing.id,
-      visitId: null,
-    }).catch((err) => console.error('[magic-link/send] email failed', err));
+    // Detach the email send so both branches return after the same fast DB
+    // work — awaiting the Gmail round-trip ONLY in the email-exists branch is a
+    // timing oracle that reveals which addresses are customers. BUT a bare
+    // `void promise` dies on Vercel: the lambda freezes the moment the response
+    // is sent, killing the in-flight send (found live 2026-06-10 — every
+    // magic-link email was silently dropped). waitUntil() keeps the function
+    // alive until the promise settles without delaying the response.
+    waitUntil(
+      sendAndLog({
+        kind: 'magic_link',
+        to: parsed.data.email,
+        subject: rendered.subject,
+        body: rendered.text,
+        html: rendered.html,
+        customerId: existing.id,
+        visitId: null,
+      }).catch((err) => console.error('[magic-link/send] email failed', err)),
+    );
 
     res.status(200).json({ status: 'ok' });
   } catch (err) {
