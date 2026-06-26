@@ -204,7 +204,6 @@ const Hero = ({ tweaks, onBookClick }) => (
               <source src="assets/bin-clean.mp4" type="video/mp4" />
             </video>
           </div>
-          <div className="float-chip sky">Solve a stinky garbage bin problem in 90 seconds or less</div>
         </div>
       </div>
     </div>

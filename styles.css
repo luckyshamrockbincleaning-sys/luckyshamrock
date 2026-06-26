@@ -271,6 +271,7 @@ section {
 .hero {
   background: transparent;
   padding-top: 60px;
+  padding-bottom: 40px;
 }
 .hero-grid {
   display: grid;
