@@ -1,90 +1,22 @@
 /* global React, Icon, CleanBin */
-const { useState: useStateBA, useEffect: useEffectBA, useRef: useRefBA } = React;
 
-// ===== Before/After slider =====
-const BeforeAfter = () => {
-  const [pos, setPos] = useStateBA(82);
-  const stageRef = useRefBA(null);
-  const dragging = useRefBA(false);
-
-  const handleMove = (clientX) => {
-    if (!stageRef.current) return;
-    const rect = stageRef.current.getBoundingClientRect();
-    const x = ((clientX - rect.left) / rect.width) * 100;
-    setPos(Math.max(8, Math.min(92, x)));
-  };
-
-  useEffectBA(() => {
-    const onMove = (e) => dragging.current && handleMove(e.clientX);
-    const onTouch = (e) => dragging.current && e.touches[0] && handleMove(e.touches[0].clientX);
-    const onUp = () => (dragging.current = false);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('touchmove', onTouch);
-    window.addEventListener('mouseup', onUp);
-    window.addEventListener('touchend', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('touchmove', onTouch);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('touchend', onUp);
-    };
-  }, []);
-
-  return (
-    <section className="beforeafter" id="before-after">
-      <div className="container">
-        <div className="ba-header">
-          <div>
-            <h2>From <span style={{color: 'var(--green)'}}>"don't open that"</span> to <span style={{color: 'var(--sky-deep)'}}>"smells like nothing"</span></h2>
-          </div>
-        </div>
-
-        <div
-          className="ba-stage"
-          ref={stageRef}
-          onMouseDown={(e) => { dragging.current = true; handleMove(e.clientX); }}
-          onTouchStart={(e) => { dragging.current = true; e.touches[0] && handleMove(e.touches[0].clientX); }}
-        >
-          {/* Before */}
-          <div className="ba-half before">
-            <img src="assets/mascot-before.jpg" alt="Stinky bin" className="ba-image"/>
-            <div className="ba-stamp ba-stamp-before">BEFORE</div>
-          </div>
-          {/* After */}
-          <div className="ba-after-wrap" style={{clipPath: `inset(0 0 0 ${pos}%)`}}>
-            <div className="ba-half after">
-              <img src="assets/mascot-after.jpg" alt="Clean bin" className="ba-image"/>
-              <div className="ba-stamp ba-stamp-after">AFTER</div>
-            </div>
-          </div>
-          {/* Divider */}
-          <div className="ba-handle" style={{left: `${pos}%`}}>
-            <div
-              className="ba-handle-knob"
-              style={{width: 64, height: 64, boxShadow: '0 4px 16px rgba(0,0,0,0.28)'}}
-            >
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 6 3 12 9 18"/>
-                <polyline points="15 6 21 12 15 18"/>
-              </svg>
-            </div>
-            <div
-              style={{
-                position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
-                marginTop: 12, whiteSpace: 'nowrap',
-                fontFamily: "'Nunito', sans-serif", fontWeight: 800, fontSize: 13,
-                color: 'white', background: 'var(--green)', padding: '5px 14px', borderRadius: 999,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.22)', pointerEvents: 'none',
-              }}
-            >
-              ← Slide here →
-            </div>
-          </div>
-        </div>
+// ===== Clean video =====
+const BeforeAfter = () => (
+  <section className="beforeafter" id="before-after">
+    <div className="container">
+      <div className="ba-header">
+        <h2>From <span style={{color: 'var(--green)'}}>"don't open that"</span> to <span style={{color: 'var(--sky-deep)'}}>"smells like nothing"</span></h2>
       </div>
-    </section>
-  );
-};
+      <video
+        autoPlay muted loop playsInline
+        poster="assets/mascot-after.jpg"
+        className="clean-video"
+      >
+        <source src="assets/bin-clean.mp4" type="video/mp4" />
+      </video>
+    </div>
+  </section>
+);
 
 // ===== How It Works =====
 const HowItWorks = ({ onBookClick }) => {
