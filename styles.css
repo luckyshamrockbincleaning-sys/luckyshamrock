@@ -351,6 +351,7 @@ section {
 
 @media (max-width: 880px) {
   .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+  .hero-mascot-frame { width: 100%; margin-right: 0; transform: none; }
 }
 
 /* Marquee */
