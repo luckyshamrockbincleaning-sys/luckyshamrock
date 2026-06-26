@@ -313,7 +313,8 @@ section {
   width: 125%;
   margin-right: -25%;
 }
-.hero-mascot-frame img { display: block; width: 100%; height: auto; }
+.hero-mascot-frame img,
+.hero-mascot-frame video { display: block; width: 100%; height: auto; }
 
 /* Floating chip badges around hero */
 .float-chip {
@@ -377,14 +378,7 @@ section {
   to { transform: translateX(-50%); }
 }
 
-/* ---------- Before/After ---------- */
-
-.beforeafter {
-  background: var(--cream);
-  position: relative;
-}
-/* Decorative top divider — wavy scalloped edge that visually separates hero from cream */
-.beforeafter::before,
+/* Decorative top divider — wavy scalloped edge */
 .how::before,
 .pricing::before,
 .booking::before,
@@ -408,7 +402,6 @@ footer::before {
   pointer-events: none;
   z-index: 1;
 }
-.beforeafter::before { background: var(--cream); }
 .how::before { background: var(--paper); }
 .pricing::before { background: var(--cream); }
 .booking::before { background: var(--ink); }
@@ -416,20 +409,6 @@ footer::before {
 .faq::before { background: var(--cream); }
 .footer-pre::before { background: var(--green); }
 footer::before { background: var(--green-darker); }
-.ba-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: end;
-  margin-bottom: 50px;
-  gap: 40px;
-}
-.ba-header h2 { max-width: 700px; }
-.clean-video {
-  width: 100%;
-  display: block;
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow-lg);
-}
 
 /* Stink elements on before side */
 .stink {
@@ -1179,7 +1158,6 @@ footer {
 @media (max-width: 880px) {
   .footer-grid { grid-template-columns: 1fr 1fr; }
   .footer-pre-inner { grid-template-columns: 1fr; }
-  .ba-header { flex-direction: column; align-items: start; }
 }
 
 /* Service area badge */

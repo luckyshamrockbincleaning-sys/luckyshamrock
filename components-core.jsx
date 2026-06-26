@@ -200,7 +200,9 @@ const Hero = ({ tweaks, onBookClick }) => (
         </div>
         <div className="hero-visual">
           <div className="hero-mascot-frame">
-            <img src="assets/mascot-before.jpg" alt="Lucky the leprechaun reacts to a stinky bin" />
+            <video autoPlay muted loop playsInline poster="assets/mascot-after.jpg">
+              <source src="assets/bin-clean.mp4" type="video/mp4" />
+            </video>
           </div>
           <div className="float-chip sky">Solve a stinky garbage bin problem in 90 seconds or less</div>
         </div>

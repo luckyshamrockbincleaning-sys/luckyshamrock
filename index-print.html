@@ -36,17 +36,15 @@
       }
 
       /* Ensure backgrounds print */
-      .beforeafter, .how, .pricing, .booking, .testimonials, .faq,
+      .how, .pricing, .booking, .testimonials, .faq,
       .footer-pre, footer, .price-card, .how-step, .testimonial-card,
       .booking-card, .faq-item, .float-chip, .area-pill,
-      .marquee, .ba-stamp, .booking-step-pill,
-      .ba-half, .ba-half.before, .ba-half.after {
+      .marquee, .booking-step-pill {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }
 
       /* Sections start on new page */
-      .beforeafter,
       .how,
       .pricing,
       .booking,
@@ -64,13 +62,6 @@
 
       .hero { padding-top: 20px !important; }
 
-      /* Force Before/After to show both halves at 50% */
-      .ba-after-wrap {
-        clip-path: inset(0 0 0 50%) !important;
-      }
-      .ba-handle { left: 50% !important; }
-      .ba-stage { cursor: default !important; }
-
       /* Scale down headings slightly for print */
       h1 { font-size: 56px !important; }
       h2 { font-size: 38px !important; }
@@ -79,7 +70,7 @@
       /* Avoid breaking cards/sections internally */
       .price-card, .how-step, .testimonial-card,
       .faq-item, .booking-card, .footer-grid,
-      .hero-grid, .ba-stage, .how-steps,
+      .hero-grid, .how-steps,
       .pricing-grid, .testimonials-grid, .booking-grid {
         break-inside: avoid;
       }

@@ -1,23 +1,5 @@
 /* global React, Icon, CleanBin */
 
-// ===== Clean video =====
-const BeforeAfter = () => (
-  <section className="beforeafter" id="before-after">
-    <div className="container">
-      <div className="ba-header">
-        <h2>From <span style={{color: 'var(--green)'}}>"don't open that"</span> to <span style={{color: 'var(--sky-deep)'}}>"smells like nothing"</span></h2>
-      </div>
-      <video
-        autoPlay muted loop playsInline
-        poster="assets/mascot-after.jpg"
-        className="clean-video"
-      >
-        <source src="assets/bin-clean.mp4" type="video/mp4" />
-      </video>
-    </div>
-  </section>
-);
-
 // ===== How It Works =====
 const HowItWorks = ({ onBookClick }) => {
   const steps = [
@@ -182,7 +164,6 @@ const WhyClean = () => {
   );
 };
 
-window.BeforeAfter = BeforeAfter;
 window.HowItWorks = HowItWorks;
 window.WhyClean = WhyClean;
 window.Pricing = Pricing;

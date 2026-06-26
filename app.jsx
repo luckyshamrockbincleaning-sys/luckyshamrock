@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Nav, Hero, BeforeAfter, HowItWorks, WhyClean, Pricing, Booking, Testimonials, FAQ, FooterCTA, Footer, TweaksPanel, useTweaks, TweakSection, TweakText, TweakColor, TweakSelect */
+/* global React, ReactDOM, Nav, Hero, HowItWorks, WhyClean, Pricing, Booking, Testimonials, FAQ, FooterCTA, Footer, TweaksPanel, useTweaks, TweakSection, TweakText, TweakColor, TweakSelect */
 const { useEffect } = React;
 
 const PALETTES = {
@@ -37,7 +37,6 @@ function App() {
     <div className="app">
       <Nav tweaks={tweaks} onBookClick={scrollToBook}/>
       <Hero tweaks={tweaks} onBookClick={scrollToBook}/>
-      <BeforeAfter/>
       <HowItWorks onBookClick={scrollToBook}/>
       <WhyClean/>
       <Pricing tweaks={tweaks} onBookClick={scrollToBook}/>
