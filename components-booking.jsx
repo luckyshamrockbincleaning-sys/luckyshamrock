@@ -47,7 +47,7 @@ function WaitlistCapture({ email, postalCode, message }) {
       </button>
       {state === 'error' && (
         <p style={{ marginTop: 10, fontSize: 13 }}>
-          Couldn't join the waitlist — try again or email us at hello@luckyshamrock.ca.
+          Couldn't join the waitlist — try again or email us at shea@luckyshamrock.ca.
         </p>
       )}
     </div>
@@ -318,7 +318,7 @@ const Booking = ({ tweaks }) => {
       }
       setSubmitState({
         phase: 'error',
-        message: data.message || 'Something went wrong. Please try again or email hello@luckyshamrock.ca.',
+        message: data.message || 'Something went wrong. Please try again or email shea@luckyshamrock.ca.',
       });
     } catch {
       setSubmitState({

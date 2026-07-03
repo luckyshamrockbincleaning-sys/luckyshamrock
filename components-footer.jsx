@@ -199,7 +199,7 @@ const Footer = ({ tweaks }) => (
           <h4>Contact</h4>
           <ul>
             <li><a href={`tel:${tweaks.phone}`}>{tweaks.phone}</a></li>
-            <li><a href="mailto:hello@luckyshamrock.ca">hello@luckyshamrock.ca</a></li>
+            <li><a href="mailto:shea@luckyshamrock.ca">shea@luckyshamrock.ca</a></li>
             <li style={{color: 'rgba(255, 248, 232, 0.75)', fontSize: 15}}>Mon–Sat · 7am–6pm</li>
           </ul>
           <div className="socials" style={{marginTop: 14}}>
