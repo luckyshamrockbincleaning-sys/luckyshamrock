@@ -4,6 +4,8 @@ import {
   magicLinkTemplate,
   onOurWayTemplate,
   doneTemplate,
+  DONE_BEFORE_PHOTO_CID,
+  DONE_AFTER_PHOTO_CID,
 } from '../email/templates.js';
 
 describe('bookingConfirmedTemplate', () => {
@@ -69,6 +71,30 @@ describe('doneTemplate', () => {
     const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
     expect(t.text.toLowerCase()).toContain('photo');
     expect(t.html.toLowerCase()).toContain('photo');
+  });
+
+  it('renders the clean photo inline when only the after photo exists', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
+    expect(t.html).toContain(`cid:${DONE_AFTER_PHOTO_CID}`);
+    expect(t.html).not.toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
+  });
+
+  it('renders a side-by-side before/after card when both photos exist', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true, hasBeforePhoto: true });
+    expect(t.html).toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
+    expect(t.html).toContain(`cid:${DONE_AFTER_PHOTO_CID}`);
+    expect(t.html).toMatch(/before/i);
+    expect(t.html).toMatch(/after/i);
+    // The before photo must appear to the left of (earlier than) the after photo.
+    expect(t.html.indexOf(`cid:${DONE_BEFORE_PHOTO_CID}`)).toBeLessThan(t.html.indexOf(`cid:${DONE_AFTER_PHOTO_CID}`));
+    expect(t.text.toLowerCase()).toContain('before');
+  });
+
+  it('ignores hasBeforePhoto without hasPhoto and renders no cid refs when photoless', () => {
+    const before_only = doneTemplate({ name: 'Sam', nextVisitDate: null, hasBeforePhoto: true });
+    expect(before_only.html).not.toContain('cid:');
+    const none = doneTemplate({ name: 'Sam', nextVisitDate: null });
+    expect(none.html).not.toContain('cid:');
   });
 
   it('acts as a receipt: states the charged amount', () => {

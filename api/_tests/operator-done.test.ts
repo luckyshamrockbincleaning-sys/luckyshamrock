@@ -155,6 +155,76 @@ describe('POST /api/operator/visit/:id/done', () => {
     expect(v!.status).toBe('scheduled');
   });
 
+  it('accepts an optional before photo alongside the clean photo', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      clean_photo: {
+        filename: 'clean-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.from('after-image').toString('base64'),
+      },
+      before_photo: {
+        filename: 'before-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.from('before-image').toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+  });
+
+  it('returns 400 for an invalid before photo before marking done', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      clean_photo: {
+        filename: 'clean-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.from('after-image').toString('base64'),
+      },
+      before_photo: {
+        filename: 'before-bin.gif',
+        mime_type: 'image/gif',
+        content_base64: Buffer.from('before-image').toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(400);
+    expect((res.body as any).message).toContain('before_photo');
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
+  });
+
+  it('still completes when a before photo arrives without a clean photo', async () => {
+    // API compatibility: clean_photo is optional at the API layer (the /ops UI
+    // enforces it), so a stray before_photo alone must not break Done.
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-06-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      before_photo: {
+        filename: 'before-bin.jpg',
+        mime_type: 'image/jpeg',
+        content_base64: Buffer.from('before-image').toString('base64'),
+      },
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+  });
+
   it('returns next_visit_date null when there is no later scheduled visit', async () => {
     const c = await seedCustomer();
     const v1 = await addVisit(c, '2026-06-10');

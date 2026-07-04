@@ -12,6 +12,13 @@ export interface EmailAttachment {
   filename: string;
   contentType: string;
   contentBase64: string;
+  /**
+   * Render inside the HTML body (via <img src="cid:contentId">) instead of as
+   * a downloadable attachment. Requires contentId; without one the attachment
+   * silently falls back to regular (there'd be nothing referencing it).
+   */
+  inline?: boolean;
+  contentId?: string;
 }
 
 export interface SendGmailResult {
@@ -106,52 +113,22 @@ export function buildRfc822Message(p: {
   html: string;
   attachments?: EmailAttachment[];
 }): string {
-  if (p.attachments?.length) {
-    return buildMixedMessage(p as typeof p & { attachments: EmailAttachment[] });
-  }
+  const all = p.attachments ?? [];
+  // Inline images need a Content-ID the HTML can reference; without one they
+  // degrade to regular attachments rather than becoming orphaned parts.
+  const inline = all.filter((a) => a.inline && a.contentId);
+  const regular = all.filter((a) => !(a.inline && a.contentId));
 
-  const boundary = `boundary_${crypto.randomUUID()}`;
-  return [
+  const headers = [
     `From: ${p.from}`,
     `To: ${p.to}`,
     `Subject: ${encodeSubject(p.subject)}`,
     `MIME-Version: 1.0`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/plain; charset="UTF-8"`,
-    `Content-Transfer-Encoding: 7bit`,
-    ``,
-    p.text,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/html; charset="UTF-8"`,
-    `Content-Transfer-Encoding: 7bit`,
-    ``,
-    p.html,
-    ``,
-    `--${boundary}--`,
-  ].join('\r\n');
-}
+  ];
 
-function buildMixedMessage(p: {
-  from: string;
-  to: string;
-  subject: string;
-  text: string;
-  html: string;
-  attachments: EmailAttachment[];
-}): string {
-  const mixedBoundary = `mixed_${crypto.randomUUID()}`;
+  // Innermost: text + html alternatives.
   const altBoundary = `alt_${crypto.randomUUID()}`;
-  const parts = [
-    `From: ${p.from}`,
-    `To: ${p.to}`,
-    `Subject: ${encodeSubject(p.subject)}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
-    ``,
-    `--${mixedBoundary}`,
+  let body = [
     `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
     ``,
     `--${altBoundary}`,
@@ -169,20 +146,57 @@ function buildMixedMessage(p: {
     `--${altBoundary}--`,
   ];
 
-  for (const a of p.attachments) {
-    parts.push(
+  // Wrap in multipart/related when there are inline images (RFC 2387: the
+  // alternative part comes first, then the parts its HTML references by cid).
+  if (inline.length) {
+    const relBoundary = `rel_${crypto.randomUUID()}`;
+    const rel = [
+      `Content-Type: multipart/related; boundary="${relBoundary}"`,
       ``,
-      `--${mixedBoundary}`,
-      `Content-Type: ${a.contentType}`,
-      `Content-Transfer-Encoding: base64`,
-      `Content-Disposition: attachment; filename="${escapeFilename(a.filename)}"`,
-      ``,
-      wrapBase64(a.contentBase64),
-    );
+      `--${relBoundary}`,
+      ...body,
+    ];
+    for (const a of inline) {
+      rel.push(
+        ``,
+        `--${relBoundary}`,
+        `Content-Type: ${a.contentType}`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-ID: <${a.contentId}>`,
+        `Content-Disposition: inline; filename="${escapeFilename(a.filename)}"`,
+        ``,
+        wrapBase64(a.contentBase64),
+      );
+    }
+    rel.push(``, `--${relBoundary}--`);
+    body = rel;
   }
 
-  parts.push(``, `--${mixedBoundary}--`);
-  return parts.join('\r\n');
+  // Wrap in multipart/mixed when there are regular (downloadable) attachments.
+  if (regular.length) {
+    const mixedBoundary = `mixed_${crypto.randomUUID()}`;
+    const mixed = [
+      `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
+      ``,
+      `--${mixedBoundary}`,
+      ...body,
+    ];
+    for (const a of regular) {
+      mixed.push(
+        ``,
+        `--${mixedBoundary}`,
+        `Content-Type: ${a.contentType}`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-Disposition: attachment; filename="${escapeFilename(a.filename)}"`,
+        ``,
+        wrapBase64(a.contentBase64),
+      );
+    }
+    mixed.push(``, `--${mixedBoundary}--`);
+    body = mixed;
+  }
+
+  return [...headers, ...body].join('\r\n');
 }
 
 function encodeSubject(subject: string): string {

@@ -108,7 +108,7 @@ function loadImage(src) {
   });
 }
 
-async function prepareCleanPhoto(file) {
+async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
   if (!file) return null;
   const dataUrl = await readFileAsDataUrl(file);
   const img = await loadImage(dataUrl);
@@ -125,7 +125,7 @@ async function prepareCleanPhoto(file) {
   const contentBase64 = jpg.split(',')[1];
   if (!contentBase64) throw new Error('Could not prepare photo.');
   return {
-    filename: 'clean-bin.jpg',
+    filename,
     mime_type: 'image/jpeg',
     content_base64: contentBase64,
   };
@@ -139,6 +139,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
   const [photoState, setPhotoState] = useState({ phase: 'idle', photo: null, filename: '', message: '' });
+  const [beforeState, setBeforeState] = useState({ phase: 'idle', photo: null, filename: '', message: '' });
   const pay = PAY_BADGE[stop.payment_status];
 
   function doneWithDiscount() {
@@ -148,7 +149,10 @@ function StopCard({ stop, onAction, busy, showDate }) {
     }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-    onAction('done', stop, { discount_cents, clean_photo: photoState.photo });
+    const payload = { discount_cents, clean_photo: photoState.photo };
+    // Optional before shot → customer gets the side-by-side card in the email.
+    if (beforeState.photo) payload.before_photo = beforeState.photo;
+    onAction('done', stop, payload);
   }
 
   async function onPhotoChange(e) {
@@ -160,6 +164,23 @@ function StopCard({ stop, onAction, busy, showDate }) {
       setPhotoState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
     } catch (err) {
       setPhotoState({
+        phase: 'error',
+        photo: null,
+        filename: file.name,
+        message: err.message || 'Could not prepare photo.',
+      });
+    }
+  }
+
+  async function onBeforePhotoChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setBeforeState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
+    try {
+      const photo = await prepareCleanPhoto(file, 'before-bin.jpg');
+      setBeforeState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
+    } catch (err) {
+      setBeforeState({
         phase: 'error',
         photo: null,
         filename: file.name,
@@ -191,6 +212,31 @@ function StopCard({ stop, onAction, busy, showDate }) {
       </div>
 
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
+
+      {!isDone && !isCancelled && (
+        <div className="ops-photo" style={{ marginTop: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+            Before photo (optional — snap when you arrive)
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            disabled={busy}
+            onChange={onBeforePhotoChange}
+            style={{ width: '100%' }}
+          />
+          {beforeState.message && (
+            <div style={{
+              marginTop: 6,
+              fontSize: 12,
+              color: beforeState.phase === 'error' ? '#7A2222' : 'var(--ink-3, #6b6b6b)',
+            }}>
+              {beforeState.filename ? `${beforeState.filename} · ` : ''}{beforeState.message}
+            </div>
+          )}
+        </div>
+      )}
 
       {!isDone && !isCancelled && (
         <div className="ops-photo" style={{ marginTop: 12 }}>
@@ -238,7 +284,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || photoState.phase === 'loading' || !photoState.photo}
+            disabled={busy || photoState.phase === 'loading' || beforeState.phase === 'loading' || !photoState.photo}
             onClick={doneWithDiscount}
           >
             Done

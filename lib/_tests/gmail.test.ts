@@ -106,6 +106,97 @@ describe('buildRfc822Message', () => {
     expect(raw).toContain(Buffer.from('fake-image').toString('base64'));
   });
 
+  it('builds multipart/related with Content-ID + inline disposition for inline images', () => {
+    const raw = buildRfc822Message({
+      from: 'shea@luckyshamrock.ca',
+      to: 'sam@example.com',
+      subject: 'Your garbage bin is clean',
+      text: 'Before-and-after photos are attached.',
+      html: '<img src="cid:before-photo"><img src="cid:after-photo">',
+      attachments: [
+        {
+          filename: 'before-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('before-image').toString('base64'),
+          inline: true,
+          contentId: 'before-photo',
+        },
+        {
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('after-image').toString('base64'),
+          inline: true,
+          contentId: 'after-photo',
+        },
+      ],
+    });
+
+    expect(raw).toContain('Content-Type: multipart/related;');
+    expect(raw).toContain('Content-Type: multipart/alternative;');
+    expect(raw).toContain('Content-ID: <before-photo>');
+    expect(raw).toContain('Content-ID: <after-photo>');
+    expect(raw).toContain('Content-Disposition: inline; filename="before-bin.jpg"');
+    expect(raw).toContain('Content-Disposition: inline; filename="clean-bin.jpg"');
+    // Inline-only messages don't need a mixed wrapper.
+    expect(raw).not.toContain('Content-Type: multipart/mixed;');
+    expect(raw).toContain(Buffer.from('before-image').toString('base64'));
+    expect(raw).toContain(Buffer.from('after-image').toString('base64'));
+  });
+
+  it('nests related inside mixed when inline and regular attachments coexist', () => {
+    const raw = buildRfc822Message({
+      from: 'shea@luckyshamrock.ca',
+      to: 'sam@example.com',
+      subject: 'Hi',
+      text: 'x',
+      html: '<img src="cid:after-photo">',
+      attachments: [
+        {
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('after-image').toString('base64'),
+          inline: true,
+          contentId: 'after-photo',
+        },
+        {
+          filename: 'receipt.pdf',
+          contentType: 'application/pdf',
+          contentBase64: Buffer.from('fake-pdf').toString('base64'),
+        },
+      ],
+    });
+
+    expect(raw).toContain('Content-Type: multipart/mixed;');
+    expect(raw).toContain('Content-Type: multipart/related;');
+    expect(raw).toContain('Content-ID: <after-photo>');
+    expect(raw).toContain('Content-Disposition: inline; filename="clean-bin.jpg"');
+    expect(raw).toContain('Content-Disposition: attachment; filename="receipt.pdf"');
+    // The mixed wrapper must open before the related part.
+    expect(raw.indexOf('multipart/mixed')).toBeLessThan(raw.indexOf('multipart/related'));
+  });
+
+  it('treats an inline attachment without a contentId as a regular attachment', () => {
+    const raw = buildRfc822Message({
+      from: 'shea@luckyshamrock.ca',
+      to: 'sam@example.com',
+      subject: 'Hi',
+      text: 'x',
+      html: '<p>x</p>',
+      attachments: [
+        {
+          filename: 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: Buffer.from('after-image').toString('base64'),
+          inline: true,
+        },
+      ],
+    });
+
+    expect(raw).toContain('Content-Type: multipart/mixed;');
+    expect(raw).not.toContain('multipart/related');
+    expect(raw).toContain('Content-Disposition: attachment; filename="clean-bin.jpg"');
+  });
+
   it('keeps a display-name From header intact ("Lucky Shamrock <addr>")', () => {
     // sendViaGmail sends with a display name so customers see "Lucky Shamrock"
     // in their inbox, not the bare mailbox address.

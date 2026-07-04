@@ -16,6 +16,14 @@ export interface RenderedEmail {
 const FOOTER_HTML = '<p style="color:#888;font-size:12px;margin-top:32px">Lucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan</p>';
 const FOOTER_TEXT = '--\nLucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan';
 
+/**
+ * Content-IDs for the done email's inline photos. The operator handler
+ * attaches the photos with these ids (inline: true) and the HTML references
+ * them as <img src="cid:...">. Keep the two in sync via these constants.
+ */
+export const DONE_BEFORE_PHOTO_CID = 'before-photo';
+export const DONE_AFTER_PHOTO_CID = 'after-photo';
+
 export function bookingConfirmedTemplate(p: {
   name: string;
   firstVisitDate: string;
@@ -68,6 +76,12 @@ export function doneTemplate(p: {
   reviewUrl?: string | null;
   hasPhoto?: boolean;
   /**
+   * Operator also snapped the bin BEFORE cleaning — renders the side-by-side
+   * before/after card. Only honored when hasPhoto (the after shot) is true:
+   * a "before" with no "after" would be an anti-testimonial.
+   */
+  hasBeforePhoto?: boolean;
+  /**
    * Payment outcome for this clean — the email doubles as the customer's
    * receipt, since charging happens silently on the operator's Done tap.
    * - charged: card billed `amountCents` (include the amount).
@@ -80,8 +94,34 @@ export function doneTemplate(p: {
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
-  const photoText = p.hasPhoto ? `\n\nPhoto proof is attached.` : '';
-  const photoHtml = p.hasPhoto ? `<p>Photo proof is attached.</p>` : '';
+  const showBeforeAfter = !!p.hasPhoto && !!p.hasBeforePhoto;
+  const photoText = showBeforeAfter
+    ? `\n\nBefore-and-after photos of your bin are attached.`
+    : p.hasPhoto
+      ? `\n\nPhoto proof is attached.`
+      : '';
+  // Inline styles + table layout: the only combination that renders
+  // consistently across Gmail, Apple Mail, and Outlook.
+  const photoLabelStyle =
+    'font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;padding-bottom:6px;text-align:center';
+  const photoImgStyle = 'width:100%;max-width:230px;border-radius:10px;display:block;margin:0 auto';
+  const photoHtml = showBeforeAfter
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:16px 0">` +
+      `<tr>` +
+      `<td style="${photoLabelStyle};color:#8a6d3b" width="50%">Before</td>` +
+      `<td style="${photoLabelStyle};color:#1d7a3d" width="50%">After ✨</td>` +
+      `</tr>` +
+      `<tr>` +
+      `<td style="padding-right:6px" width="50%"><img src="cid:${DONE_BEFORE_PHOTO_CID}" alt="Your bin before cleaning" style="${photoImgStyle}"></td>` +
+      `<td style="padding-left:6px" width="50%"><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your bin after cleaning" style="${photoImgStyle}"></td>` +
+      `</tr>` +
+      `</table>`
+    : p.hasPhoto
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:320px;margin:16px 0">` +
+        `<tr><td style="${photoLabelStyle};color:#1d7a3d">Sparkling clean ✨</td></tr>` +
+        `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your clean bin" style="width:100%;max-width:320px;border-radius:10px;display:block"></td></tr>` +
+        `</table>`
+      : '';
   let chargeLine = '';
   if (p.charge?.kind === 'charged' && typeof p.charge.amountCents === 'number') {
     chargeLine = `Your card on file was charged ${formatCad(p.charge.amountCents)}.`;

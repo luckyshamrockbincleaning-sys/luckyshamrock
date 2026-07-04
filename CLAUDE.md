@@ -162,9 +162,19 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   (no replacement). Customer skip (`/api/visit/:id/skip`) inserts a replacement.
 - **Operator Done requires photo proof in the UI.** `/ops` compresses the selected
   clean-bin photo to JPEG and sends it in `POST /api/operator/act` as
-  `clean_photo`; the Done email attaches it. V1 does **not** store photos
-  durably — email attachment only. Backend accepts no-photo Done for API
-  compatibility but validates any supplied photo (JPEG/PNG/WebP, max 5 MB).
+  `clean_photo`; an OPTIONAL `before_photo` (snapped at arrival, same
+  validation) rides along. V1 does **not** store photos durably — email only.
+  Backend accepts no-photo Done for API compatibility but validates any
+  supplied photo (JPEG/PNG/WebP, max 5 MB each).
+- **Done-email photos render INLINE, not as paperclip attachments.** The
+  handler marks them `inline: true` with Content-IDs from
+  `lib/email/templates.ts` (`DONE_BEFORE_PHOTO_CID`/`DONE_AFTER_PHOTO_CID`);
+  `buildRfc822Message` wraps inline images in `multipart/related` and the
+  template references them as `<img src="cid:...">`. Both photos → side-by-side
+  Before/After table card; after only → single inline "Sparkling clean" image;
+  a `before_photo` without a `clean_photo` is accepted but ignored (no
+  anti-testimonial emails). Email HTML must stay table-based with inline
+  styles — Gmail/Outlook strip everything else.
 - **notify/done are double-tap-safe** for free via `sendAndLog`'s `(visit_id, kind)`
   idempotency — a second tap returns `{skipped:true}` and sends no second email.
 - **New env vars:** `OPERATOR_SECRET` (`openssl rand -hex 32`), `OPERATOR_PASSWORD`.

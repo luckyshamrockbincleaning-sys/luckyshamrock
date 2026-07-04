@@ -22,7 +22,7 @@ import {
   toOperatorVisit,
 } from './operator.js';
 import { sendAndLog } from './notifications.js';
-import { onOurWayTemplate, doneTemplate } from './email/templates.js';
+import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID } from './email/templates.js';
 import { isStripeConfigured } from './stripe.js';
 import { chargeOffSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
@@ -73,26 +73,29 @@ function isActionableVisitStatus(status: string): boolean {
   return ACTIONABLE_VISIT_STATUSES.includes(status as 'scheduled' | 'heading_there');
 }
 
-function parseCleanPhotoAttachment(input: unknown): { ok: true; attachment: EmailAttachment | null } | { ok: false; message: string } {
+function parsePhotoAttachment(
+  input: unknown,
+  field: 'clean_photo' | 'before_photo',
+): { ok: true; attachment: EmailAttachment | null } | { ok: false; message: string } {
   if (input === undefined || input === null) return { ok: true, attachment: null };
   const parsed = cleanPhotoSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, message: 'clean_photo is invalid' };
+  if (!parsed.success) return { ok: false, message: `${field} is invalid` };
 
   const ext = CLEAN_PHOTO_MIME_TO_EXT[parsed.data.mime_type];
-  if (!ext) return { ok: false, message: 'clean_photo must be a JPEG, PNG, or WebP image' };
+  if (!ext) return { ok: false, message: `${field} must be a JPEG, PNG, or WebP image` };
 
   const base64 = parsed.data.content_base64.replace(/\s/g, '');
   if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
-    return { ok: false, message: 'clean_photo content must be base64' };
+    return { ok: false, message: `${field} content must be base64` };
   }
 
   const bytes = Buffer.from(base64, 'base64');
-  if (bytes.length === 0) return { ok: false, message: 'clean_photo is empty' };
+  if (bytes.length === 0) return { ok: false, message: `${field} is empty` };
   if (bytes.length > MAX_CLEAN_PHOTO_BYTES) {
-    return { ok: false, message: 'clean_photo must be 5 MB or smaller' };
+    return { ok: false, message: `${field} must be 5 MB or smaller` };
   }
 
-  const fallbackFilename = `clean-bin.${ext}`;
+  const fallbackFilename = field === 'before_photo' ? `before-bin.${ext}` : `clean-bin.${ext}`;
   return {
     ok: true,
     attachment: {
@@ -288,9 +291,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const discountCents = Number.isFinite(req.body?.discount_cents)
     ? Math.max(0, Math.trunc(req.body.discount_cents))
     : 0;
-  const cleanPhoto = parseCleanPhotoAttachment(req.body?.clean_photo);
+  const cleanPhoto = parsePhotoAttachment(req.body?.clean_photo, 'clean_photo');
   if (!cleanPhoto.ok) {
     res.status(400).json({ status: 'invalid', message: cleanPhoto.message });
+    return;
+  }
+  const beforePhoto = parsePhotoAttachment(req.body?.before_photo, 'before_photo');
+  if (!beforePhoto.ok) {
+    res.status(400).json({ status: 'invalid', message: beforePhoto.message });
     return;
   }
 
@@ -435,11 +443,22 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         : charge.amount_cents === 0
           ? { kind: 'comped' }
           : { kind: 'charged', amountCents: charge.amount_cents };
+    // Photos render inline in the email body (cid: refs in the template).
+    // The before shot rides along only when the after shot exists — a
+    // "before" with nothing to compare against would be an anti-testimonial.
+    const photoAttachments: EmailAttachment[] = [];
+    if (cleanPhoto.attachment) {
+      if (beforePhoto.attachment) {
+        photoAttachments.push({ ...beforePhoto.attachment, inline: true, contentId: DONE_BEFORE_PHOTO_CID });
+      }
+      photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
+    }
     const tpl = doneTemplate({
       name: row.name,
       nextVisitDate: nextVisitDate ? formatFriendlyDate(nextVisitDate) : null,
       reviewUrl: process.env.REVIEW_URL || null,
       hasPhoto: !!cleanPhoto.attachment,
+      hasBeforePhoto: !!cleanPhoto.attachment && !!beforePhoto.attachment,
       charge: emailCharge,
     });
     const result = await sendAndLog({
@@ -450,7 +469,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       html: tpl.html,
       customerId: row.customerId,
       visitId,
-      attachments: cleanPhoto.attachment ? [cleanPhoto.attachment] : undefined,
+      attachments: photoAttachments.length ? photoAttachments : undefined,
     });
 
     res.status(200).json({
