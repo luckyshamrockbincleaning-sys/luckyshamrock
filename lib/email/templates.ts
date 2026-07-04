@@ -13,8 +13,36 @@ export interface RenderedEmail {
   text: string;
 }
 
-const FOOTER_HTML = '<p style="color:#888;font-size:12px;margin-top:32px">Lucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan</p>';
 const FOOTER_TEXT = '--\nLucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan';
+
+/**
+ * Shared branded shell for all outbound HTML email: green 🍀 header, white
+ * card, grey footer. Table-based with inline styles only — the lowest common
+ * denominator that renders consistently in Gmail, Apple Mail, and Outlook.
+ * Body content goes inside the card; don't append FOOTER_HTML to wrapped
+ * content (the shell has its own footer).
+ */
+function brandWrap(bodyHtml: string): string {
+  return (
+    `<div style="background:#f2f7f2;padding:24px 12px">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid #e2ece2">` +
+    `<tr><td style="background:#1d7a3d;border-radius:12px 12px 0 0;padding:18px 28px;font-family:Arial,Helvetica,sans-serif">` +
+    `<span style="font-size:20px;font-weight:bold;color:#ffffff">🍀 Lucky Shamrock</span>` +
+    `<span style="font-size:12px;color:#c9e7c9;display:block;margin-top:2px">Garbage Bin Cleaning · Fort Saskatchewan</span>` +
+    `</td></tr>` +
+    `<tr><td style="padding:24px 28px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#26332a">` +
+    bodyHtml +
+    `</td></tr>` +
+    `<tr><td style="padding:16px 28px;border-top:1px solid #eef3ee;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#8a998a">` +
+    `Lucky Shamrock Garbage Bin Cleaning · Fort Saskatchewan<br>` +
+    `(587) 982-8887 · shea@luckyshamrock.ca` +
+    `</td></tr>` +
+    `</table>` +
+    `</td></tr></table>` +
+    `</div>`
+  );
+}
 
 /**
  * Content-IDs for the done email's inline photos. The operator handler
@@ -35,11 +63,11 @@ export function bookingConfirmedTemplate(p: {
     `You're confirmed. Your first clean is scheduled for ${p.firstVisitDate}.\n\n` +
     `Manage your booking: ${p.manageUrl}\n\n` +
     FOOTER_TEXT;
-  const html =
+  const html = brandWrap(
     `<p>Hi ${escapeHtml(p.name)},</p>` +
     `<p>You're confirmed. Your first clean is scheduled for <strong>${escapeHtml(p.firstVisitDate)}</strong>.</p>` +
-    `<p><a href="${escapeAttr(p.manageUrl)}">Manage your booking</a></p>` +
-    FOOTER_HTML;
+    `<p><a href="${escapeAttr(p.manageUrl)}" style="color:#1d7a3d;font-weight:bold">Manage your booking →</a></p>`,
+  );
   return { subject, html, text };
 }
 
@@ -49,11 +77,11 @@ export function magicLinkTemplate(p: { manageUrl: string }): RenderedEmail {
     `Click to manage your booking (link expires in 1 hour):\n\n${p.manageUrl}\n\n` +
     `If you didn't request this, ignore this email.\n\n` +
     FOOTER_TEXT;
-  const html =
+  const html = brandWrap(
     `<p>Click to manage your booking (link expires in 1 hour):</p>` +
-    `<p><a href="${escapeAttr(p.manageUrl)}">${escapeHtml(p.manageUrl)}</a></p>` +
-    `<p style="color:#666">If you didn't request this, ignore this email.</p>` +
-    FOOTER_HTML;
+    `<p><a href="${escapeAttr(p.manageUrl)}" style="color:#1d7a3d;font-weight:bold">${escapeHtml(p.manageUrl)}</a></p>` +
+    `<p style="color:#666">If you didn't request this, ignore this email.</p>`,
+  );
   return { subject, html, text };
 }
 
@@ -63,10 +91,10 @@ export function onOurWayTemplate(p: { name: string }): RenderedEmail {
     `Hi ${p.name},\n\n` +
     `Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.\n\n` +
     FOOTER_TEXT;
-  const html =
+  const html = brandWrap(
     `<p>Hi ${escapeHtml(p.name)},</p>` +
-    `<p>Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.</p>` +
-    FOOTER_HTML;
+    `<p>Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.</p>`,
+  );
   return { subject, html, text };
 }
 
@@ -146,13 +174,54 @@ export function doneTemplate(p: {
     reviewText +
     `\n\n` +
     FOOTER_TEXT;
-  const html =
+  const html = brandWrap(
     `<p>Hi ${escapeHtml(p.name)},</p>` +
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
     chargeHtml +
     photoHtml +
-    reviewHtml +
-    FOOTER_HTML;
+    reviewHtml,
+  );
+  return { subject, html, text };
+}
+
+/**
+ * Internal heads-up to the operator when a booking lands. Not customer-facing
+ * — dense details over polish, everything needed to plan the route at a glance.
+ */
+export function operatorNewBookingTemplate(p: {
+  name: string;
+  email: string;
+  phone: string | null;
+  street: string;
+  city: string;
+  postalCode: string;
+  plan: string;
+  binCount: number;
+  binLocation: string | null;
+  firstVisitDate: string;
+}): RenderedEmail {
+  const subject = `🍀 New booking: ${p.name} — ${p.plan} — ${p.firstVisitDate}`;
+  const rows: Array<[string, string]> = [
+    ['Customer', p.name],
+    ['Plan', p.plan],
+    ['First clean', p.firstVisitDate],
+    ['Bins', String(p.binCount)],
+    ['Address', `${p.street}, ${p.city} ${p.postalCode}`],
+    ['Email', p.email],
+  ];
+  if (p.phone) rows.push(['Phone', p.phone]);
+  if (p.binLocation) rows.push(['Bin location', p.binLocation]);
+  const text =
+    `New booking just landed:\n\n` +
+    rows.map(([k, v]) => `${k}: ${v}`).join('\n') +
+    `\n\nOpen the route: https://www.luckyshamrock.ca/ops`;
+  const html = brandWrap(
+    `<p><strong>New booking just landed.</strong></p>` +
+    `<table cellpadding="4" cellspacing="0" style="font-size:14px">` +
+    rows.map(([k, v]) => `<tr><td style="color:#888;padding-right:12px">${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('') +
+    `</table>` +
+    `<p><a href="https://www.luckyshamrock.ca/ops" style="color:#1d7a3d;font-weight:bold">Open the operator dashboard →</a></p>`,
+  );
   return { subject, html, text };
 }
 

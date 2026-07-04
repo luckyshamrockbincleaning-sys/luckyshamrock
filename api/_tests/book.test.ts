@@ -152,6 +152,43 @@ describe('POST /api/book — happy path', () => {
     expect(kinds).not.toContain('magic_link');
     expect(kinds.filter((k) => k === 'booking_confirmed')).toHaveLength(1);
   });
+
+  it('notifies the operator of the new booking when a notify address is set', async () => {
+    process.env.OPERATOR_NOTIFY_EMAIL = 'ops@example.com';
+    try {
+      const req = mockReq<typeof handler>({
+        method: 'POST',
+        body: { ...validBody, plan: 'monthly' },
+      });
+      const res = mockRes<typeof handler>();
+      await handler(req, res);
+      expect(res.statusCode).toBe(200);
+
+      const db = getDb();
+      const logs = await db.select().from(notificationLog);
+      const kinds = logs.map((l) => l.kind);
+      expect(kinds).toContain('operator_new_booking');
+      expect(kinds.filter((k) => k === 'operator_new_booking')).toHaveLength(1);
+    } finally {
+      delete process.env.OPERATOR_NOTIFY_EMAIL;
+    }
+  });
+
+  it('sends no operator notification when no notify address is configured', async () => {
+    delete process.env.OPERATOR_NOTIFY_EMAIL;
+    delete process.env.GMAIL_SEND_AS;
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: { ...validBody, plan: 'oneoff', bin_count: 1, oneoff_date: '2099-07-15' },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+    expect(res.statusCode).toBe(200);
+
+    const db = getDb();
+    const logs = await db.select().from(notificationLog);
+    expect(logs.map((l) => l.kind)).not.toContain('operator_new_booking');
+  });
 });
 
 describe('POST /api/book — atomicity', () => {

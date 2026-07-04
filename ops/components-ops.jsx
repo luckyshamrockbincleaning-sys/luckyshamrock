@@ -277,7 +277,17 @@ function StopCard({ stop, onAction, busy, showDate }) {
 
       <div className="ops-actions">
         {!isDone && !isCancelled && (
-          <button className="btn btn-primary ops-btn" disabled={busy} onClick={() => onAction('notify', stop)}>
+          <button
+            className="btn btn-primary ops-btn"
+            disabled={busy}
+            onClick={() => {
+              // Open directions synchronously in the tap handler (popup
+              // blockers kill window.open from async callbacks), then notify.
+              const dest = encodeURIComponent(`${stop.street}, ${stop.city} ${stop.postal_code}`);
+              window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}`, '_blank', 'noopener');
+              onAction('notify', stop);
+            }}
+          >
             {heading ? 'Resend “on my way”' : 'On my way'}
           </button>
         )}

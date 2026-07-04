@@ -11,7 +11,8 @@ export type EmailKind =
   | 'booking_confirmed'
   | 'on_our_way'
   | 'done'
-  | 'day_before';
+  | 'day_before'
+  | 'operator_new_booking';
 
 export interface SendEmailInput {
   kind: EmailKind;

@@ -53,6 +53,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'on_our_way',
   'done',
   'day_before',
+  'operator_new_booking', // internal: tells the operator a booking landed
 ]);
 
 // Per-visit billing state (Phase 6 — Stripe).

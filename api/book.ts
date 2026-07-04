@@ -7,7 +7,7 @@ import { bookRequestSchema } from '../lib/validation.js';
 import { isInServiceArea, normalizePostalCode } from '../lib/postal.js';
 import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { sendAndLog } from '../lib/notifications.js';
-import { bookingConfirmedTemplate } from '../lib/email/templates.js';
+import { bookingConfirmedTemplate, operatorNewBookingTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
 import {
   createBookingSetupIntent,
@@ -293,6 +293,39 @@ export default async function handler(
       customerId,
       visitId: firstVisitId,
     });
+
+    // Heads-up to the operator. Best-effort: a failed internal email must
+    // never fail the customer's booking. Idempotent on (firstVisitId, kind).
+    const operatorEmail = process.env.OPERATOR_NOTIFY_EMAIL || process.env.GMAIL_SEND_AS;
+    if (operatorEmail) {
+      try {
+        const planLabel =
+          data.plan === 'oneoff' ? 'One-Time Clean' : data.plan === 'monthly' ? 'Monthly' : 'Three Wash Season';
+        const opTpl = operatorNewBookingTemplate({
+          name: data.name,
+          email: data.email,
+          phone: data.phone ?? null,
+          street: data.street,
+          city: data.city,
+          postalCode: data.postal_code,
+          plan: planLabel,
+          binCount: data.bin_count,
+          binLocation: data.bin_location ?? null,
+          firstVisitDate: firstVisitDateLong,
+        });
+        await sendAndLog({
+          kind: 'operator_new_booking',
+          to: operatorEmail,
+          subject: opTpl.subject,
+          body: opTpl.text,
+          html: opTpl.html,
+          customerId,
+          visitId: firstVisitId,
+        });
+      } catch (err) {
+        console.error('[book] operator notification failed (booking unaffected)', err);
+      }
+    }
 
     // If Stripe is not configured, keep the old no-card booking path alive and
     // best-effort provision a customer for later. When Stripe is configured,

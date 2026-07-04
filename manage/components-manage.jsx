@@ -123,14 +123,18 @@ function LoginCard() {
   );
 }
 
-function CustomerCard({ customer }) {
+function CustomerCard({ customer, showPickupDay }) {
+  // Pickup day only drives recurring schedules — for one-off customers it's a
+  // meaningless placeholder value, so hide the row entirely.
   return (
     <div className="manage-card">
       <h2>Account</h2>
       <div className="manage-row"><span>Name</span><span className="v">{customer.name}</span></div>
       <div className="manage-row"><span>Email</span><span className="v">{customer.email}</span></div>
       <div className="manage-row"><span>Address</span><span className="v">{customer.street}, {customer.city} {customer.postal_code}</span></div>
-      <div className="manage-row"><span>Pickup day</span><span className="v">{PICKUP_LABEL[customer.pickup_day]}</span></div>
+      {showPickupDay && (
+        <div className="manage-row"><span>Pickup day</span><span className="v">{PICKUP_LABEL[customer.pickup_day]}</span></div>
+      )}
     </div>
   );
 }
@@ -443,7 +447,10 @@ function ManageApp() {
               </p>
             </div>
           )}
-          <CustomerCard customer={state.me.customer} />
+          <CustomerCard
+            customer={state.me.customer}
+            showPickupDay={!!state.me.subscription && state.me.subscription.status === 'active'}
+          />
           {state.me.subscription && (
             <SubscriptionCard
               subscription={state.me.subscription}
