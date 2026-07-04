@@ -24,6 +24,10 @@ import {
  * Action resolution prefers req.url (req.query.action was observed empty in the
  * runtime); req.query.action is the test-friendly fallback.
  */
+// Done generates the wash GIF (sharp + gifenc, ~2-3s) on top of the Stripe
+// charge — give it headroom beyond the 10s default.
+export const config = { maxDuration: 30 };
+
 const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promise<void>> = {
   login: handleLogin,
   today: handleToday,

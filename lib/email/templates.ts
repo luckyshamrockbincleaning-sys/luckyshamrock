@@ -51,14 +51,7 @@ function brandWrap(bodyHtml: string): string {
  */
 export const DONE_BEFORE_PHOTO_CID = 'before-photo';
 export const DONE_AFTER_PHOTO_CID = 'after-photo';
-
-/**
- * The leprechaun pressure-washing animation shown between the before and
- * after photos. Served from the site (CDN-cached, ~2 MB) rather than attached
- * — keeps every done email light, and clients that block remote images still
- * get the inline CID photos.
- */
-const WASH_GIF_URL = 'https://www.luckyshamrock.ca/assets/bin-wash.gif';
+export const DONE_WASH_GIF_CID = 'wash-animation';
 
 export function bookingConfirmedTemplate(p: {
   name: string;
@@ -118,6 +111,12 @@ export function doneTemplate(p: {
    */
   hasBeforePhoto?: boolean;
   /**
+   * A per-visit "Lucky washes your bin" GIF is attached inline under
+   * DONE_WASH_GIF_CID. Only rendered in the before/after layout — the GIF is
+   * generated from those same two photos, so it can't exist without them.
+   */
+  hasWashGif?: boolean;
+  /**
    * Payment outcome for this clean — the email doubles as the customer's
    * receipt, since charging happens silently on the operator's Done tap.
    * - charged: card billed `amountCents` (include the amount).
@@ -141,21 +140,19 @@ export function doneTemplate(p: {
   const photoLabelStyle =
     'font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;padding-bottom:6px;text-align:center';
   const photoImgStyle = 'width:100%;max-width:340px;border-radius:10px;display:block;margin:0 auto';
-  // The wash GIF sits between before and after — the email tells the story:
-  // dirty bin → Lucky goes to work → sparkling bin.
-  const washGifHtml =
-    `<tr><td style="padding:10px 0"><img src="${WASH_GIF_URL}" alt="Lucky giving your bin the full treatment 🍀" style="width:100%;max-width:340px;border-radius:10px;display:block;margin:0 auto"></td></tr>`;
+  const washGifHtml = p.hasWashGif
+    ? `<tr><td style="padding:12px 0"><img src="cid:${DONE_WASH_GIF_CID}" alt="Lucky giving your bin the full treatment 🍀" style="${photoImgStyle}"></td></tr>`
+    : '';
   const photoHtml = showBeforeAfter
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
       `<tr><td style="${photoLabelStyle};color:#8a6d3b">Before</td></tr>` +
       `<tr><td><img src="cid:${DONE_BEFORE_PHOTO_CID}" alt="Your bin before cleaning" style="${photoImgStyle}"></td></tr>` +
       washGifHtml +
-      `<tr><td style="${photoLabelStyle};color:#1d7a3d">After ✨</td></tr>` +
+      `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:12px">After ✨</td></tr>` +
       `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your bin after cleaning" style="${photoImgStyle}"></td></tr>` +
       `</table>`
     : p.hasPhoto
       ? `<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
-        washGifHtml +
         `<tr><td style="${photoLabelStyle};color:#1d7a3d">Sparkling clean ✨</td></tr>` +
         `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your clean bin" style="width:100%;max-width:340px;border-radius:10px;display:block"></td></tr>` +
         `</table>`

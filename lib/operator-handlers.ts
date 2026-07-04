@@ -22,7 +22,9 @@ import {
   toOperatorVisit,
 } from './operator.js';
 import { sendAndLog } from './notifications.js';
-import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID } from './email/templates.js';
+import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID, DONE_WASH_GIF_CID } from './email/templates.js';
+import { generateWashGif } from './wash-gif.js';
+import { LEPRECHAUN_SPRITES } from './leprechaun-sprites.js';
 import { isStripeConfigured } from './stripe.js';
 import { chargeOffSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
@@ -453,12 +455,37 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       }
       photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
+    // Per-visit wash animation: Lucky foams the customer's actual before
+    // photo, then the after photo is revealed. Strictly best-effort — any
+    // failure here must degrade to the plain before/after email, never
+    // block Done (the charge has already happened above).
+    let hasWashGif = false;
+    if (cleanPhoto.attachment && beforePhoto.attachment) {
+      try {
+        const gif = await generateWashGif({
+          beforeJpeg: Buffer.from(beforePhoto.attachment.contentBase64, 'base64'),
+          afterJpeg: Buffer.from(cleanPhoto.attachment.contentBase64, 'base64'),
+          sprites: LEPRECHAUN_SPRITES,
+        });
+        photoAttachments.push({
+          filename: 'lucky-wash.gif',
+          contentType: 'image/gif',
+          contentBase64: gif.toString('base64'),
+          inline: true,
+          contentId: DONE_WASH_GIF_CID,
+        });
+        hasWashGif = true;
+      } catch (err) {
+        console.error('[operator/visit/done] wash gif failed (email falls back to photos)', err);
+      }
+    }
     const tpl = doneTemplate({
       name: row.name,
       nextVisitDate: nextVisitDate ? formatFriendlyDate(nextVisitDate) : null,
       reviewUrl: process.env.REVIEW_URL || null,
       hasPhoto: !!cleanPhoto.attachment,
       hasBeforePhoto: !!cleanPhoto.attachment && !!beforePhoto.attachment,
+      hasWashGif,
       charge: emailCharge,
     });
     const result = await sendAndLog({
