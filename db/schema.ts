@@ -54,6 +54,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'done',
   'day_before',
   'operator_new_booking', // internal: tells the operator a booking landed
+  'refund', // customer refund receipt, triggered by the charge.refunded webhook
 ]);
 
 // Per-visit billing state (Phase 6 — Stripe).

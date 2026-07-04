@@ -185,6 +185,27 @@ export function doneTemplate(p: {
 }
 
 /**
+ * Refund receipt, triggered by the charge.refunded webhook (refunds are issued
+ * from the Stripe dashboard/app, so this email is the customer's only signal).
+ */
+export function refundTemplate(p: { name: string; amountCents: number }): RenderedEmail {
+  const subject = `Your ${formatCad(p.amountCents)} refund from Lucky Shamrock`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `We've refunded ${formatCad(p.amountCents)} to your card on file.\n\n` +
+    `Depending on your bank, it can take 5–10 business days to show up on your statement.\n\n` +
+    `Questions? Just reply to this email.\n\n` +
+    FOOTER_TEXT;
+  const html = brandWrap(
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>We've refunded <strong>${formatCad(p.amountCents)}</strong> to your card on file.</p>` +
+    `<p>Depending on your bank, it can take 5–10 business days to show up on your statement.</p>` +
+    `<p style="color:#666">Questions? Just reply to this email.</p>`,
+  );
+  return { subject, html, text };
+}
+
+/**
  * Internal heads-up to the operator when a booking lands. Not customer-facing
  * — dense details over polish, everything needed to plan the route at a glance.
  */

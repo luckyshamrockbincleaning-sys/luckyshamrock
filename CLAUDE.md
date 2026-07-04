@@ -127,6 +127,16 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
 - **Gmail API client** is `lib/gmail.ts`. Sends via service-account JWT → OAuth → REST POST to `gmail.googleapis.com`. Falls back to a console-log stub (`[email:stub]` tag) when `GMAIL_SERVICE_ACCOUNT_JSON` is unset — that's the local dev / test path.
 - **Env vars (Phase 2):** `SITE_URL`, `SESSION_SECRET`, `GMAIL_SERVICE_ACCOUNT_JSON`, `GMAIL_SEND_AS`. See `.env.example`.
 - **Customer-enumeration safety:** endpoints that take an email and look it up (e.g., `POST /api/magic-link/send`) MUST always return 200/ok regardless of whether the email exists. Differentiating leaks the customer list to an attacker.
+- **Operator gets an email per new booking** (`operator_new_booking` kind, enum
+  migration 0006) sent to `OPERATOR_NOTIFY_EMAIL` || `GMAIL_SEND_AS`,
+  best-effort (failure never fails the booking), idempotent on (first visit, kind).
+- **All outbound HTML email goes through `brandWrap()`** in
+  `lib/email/templates.ts` (green 🍀 header card, own footer — don't append a
+  second footer). Table-based inline-styles only; Gmail/Outlook strip the rest.
+- **Stripe Link is disabled account-wide** (payment_method_configuration
+  `link.display_preference=off`, set 2026-07-04) so customers don't get
+  Stripe's "create a Link account" emails during card save. Don't re-enable
+  without AB's say-so.
 - **Cookie `Secure` flag is hard-coded** in `formatSessionCookieHeader`. This means the cookie is silently dropped over plain HTTP — fine for production (HTTPS) and `vercel dev` proxy, but if you ever test against `http://localhost` directly the session cookie won't stick. Don't downgrade — fix the URL instead.
 - **Workspace setup** for production Gmail send is documented in `docs/superpowers/plans/2026-05-27-phase-2-email-magiclink.md` Task 1. If a future session sees Gmail failing, start there.
 

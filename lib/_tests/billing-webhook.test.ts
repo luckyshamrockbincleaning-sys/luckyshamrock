@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { applyStripeEvent } from '../billing-webhook.js';
 import { truncateAllForTests } from '../../api/_tests/_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, subscription, visit, payment } from '../../db/schema.js';
+import { customer, subscription, visit, payment, notificationLog } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 beforeAll(() => {
@@ -104,13 +104,43 @@ describe('applyStripeEvent', () => {
 
     const tag = await applyStripeEvent({
       type: 'charge.refunded',
-      data: { object: { id: 'ch_1', payment_intent: 'pi_refunded', refunded: true } },
+      data: { object: { id: 'ch_1', payment_intent: 'pi_refunded', refunded: true, amount_refunded: 3500 } },
     });
     expect(tag).toBe('charge.refunded:applied');
     const [p] = await db.select().from(payment).where(eq(payment.id, paymentId));
     const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
     expect(p!.status).toBe('refunded');
     expect(v!.paymentStatus).toBe('refunded');
+  });
+
+  it('charge.refunded sends the customer ONE refund email, even when redelivered', async () => {
+    const cid = await makeCustomer('cus_refund2');
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_refunded2');
+    const db = getDb();
+    await db.update(payment).set({ status: 'succeeded' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'charged' }).where(eq(visit.id, visitId));
+
+    const event = {
+      type: 'charge.refunded',
+      data: { object: { id: 'ch_2', payment_intent: 'pi_refunded2', refunded: true, amount_refunded: 3500 } },
+    };
+    await applyStripeEvent(event);
+    // Stripe retries webhooks — a redelivered event must not double-email.
+    await applyStripeEvent(event);
+
+    const logs = await db.select().from(notificationLog).where(eq(notificationLog.customerId, cid));
+    const refunds = logs.filter((l) => l.kind === 'refund');
+    expect(refunds).toHaveLength(1);
+    expect(refunds[0]!.visitId).toBe(visitId);
+  });
+
+  it('charge.refunded for an unknown intent sends no email', async () => {
+    await applyStripeEvent({
+      type: 'charge.refunded',
+      data: { object: { id: 'ch_y', payment_intent: 'pi_ghost', refunded: true, amount_refunded: 100 } },
+    });
+    const logs = await getDb().select().from(notificationLog);
+    expect(logs).toHaveLength(0);
   });
 
   it('charge.refunded for an unknown intent is a safe no-op', async () => {

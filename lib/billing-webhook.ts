@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
+import { sendAndLog } from './notifications.js';
+import { refundTemplate } from './email/templates.js';
 
 /**
  * Applies a verified Stripe event to our DB. Kept separate from the HTTP handler
@@ -94,6 +96,33 @@ export async function applyStripeEvent(event: {
         .returning();
       if (p?.visitId) {
         await db.update(visit).set({ paymentStatus: 'refunded' }).where(eq(visit.id, p.visitId));
+      }
+      if (p) {
+        // Tell the customer — a refund with no email means they only find out
+        // from their bank statement. Best-effort: an email failure must not
+        // make the webhook 500 (Stripe would retry the whole event).
+        // sendAndLog's (visit_id, kind) idempotency absorbs Stripe redeliveries.
+        try {
+          const [c] = await db.select().from(customer).where(eq(customer.id, p.customerId));
+          if (c) {
+            const amountCents =
+              typeof obj.amount_refunded === 'number' && obj.amount_refunded > 0
+                ? obj.amount_refunded
+                : p.amountCents;
+            const tpl = refundTemplate({ name: c.name, amountCents });
+            await sendAndLog({
+              kind: 'refund',
+              to: c.email,
+              subject: tpl.subject,
+              body: tpl.text,
+              html: tpl.html,
+              customerId: c.id,
+              visitId: p.visitId,
+            });
+          }
+        } catch (err) {
+          console.error('[billing-webhook] refund email failed (ledger already updated)', err);
+        }
       }
       return p ? 'charge.refunded:applied' : 'charge.refunded:no_row';
     }

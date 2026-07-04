@@ -12,7 +12,8 @@ export type EmailKind =
   | 'on_our_way'
   | 'done'
   | 'day_before'
-  | 'operator_new_booking';
+  | 'operator_new_booking'
+  | 'refund';
 
 export interface SendEmailInput {
   kind: EmailKind;
