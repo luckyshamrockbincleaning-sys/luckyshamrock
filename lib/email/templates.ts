@@ -52,6 +52,14 @@ function brandWrap(bodyHtml: string): string {
 export const DONE_BEFORE_PHOTO_CID = 'before-photo';
 export const DONE_AFTER_PHOTO_CID = 'after-photo';
 
+/**
+ * The leprechaun pressure-washing animation shown between the before and
+ * after photos. Served from the site (CDN-cached, ~2 MB) rather than attached
+ * — keeps every done email light, and clients that block remote images still
+ * get the inline CID photos.
+ */
+const WASH_GIF_URL = 'https://www.luckyshamrock.ca/assets/bin-wash.gif';
+
 export function bookingConfirmedTemplate(p: {
   name: string;
   firstVisitDate: string;
@@ -132,22 +140,24 @@ export function doneTemplate(p: {
   // consistently across Gmail, Apple Mail, and Outlook.
   const photoLabelStyle =
     'font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;padding-bottom:6px;text-align:center';
-  const photoImgStyle = 'width:100%;max-width:230px;border-radius:10px;display:block;margin:0 auto';
+  const photoImgStyle = 'width:100%;max-width:340px;border-radius:10px;display:block;margin:0 auto';
+  // The wash GIF sits between before and after — the email tells the story:
+  // dirty bin → Lucky goes to work → sparkling bin.
+  const washGifHtml =
+    `<tr><td style="padding:10px 0"><img src="${WASH_GIF_URL}" alt="Lucky giving your bin the full treatment 🍀" style="width:100%;max-width:340px;border-radius:10px;display:block;margin:0 auto"></td></tr>`;
   const photoHtml = showBeforeAfter
-    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:16px 0">` +
-      `<tr>` +
-      `<td style="${photoLabelStyle};color:#8a6d3b" width="50%">Before</td>` +
-      `<td style="${photoLabelStyle};color:#1d7a3d" width="50%">After ✨</td>` +
-      `</tr>` +
-      `<tr>` +
-      `<td style="padding-right:6px" width="50%"><img src="cid:${DONE_BEFORE_PHOTO_CID}" alt="Your bin before cleaning" style="${photoImgStyle}"></td>` +
-      `<td style="padding-left:6px" width="50%"><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your bin after cleaning" style="${photoImgStyle}"></td>` +
-      `</tr>` +
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
+      `<tr><td style="${photoLabelStyle};color:#8a6d3b">Before</td></tr>` +
+      `<tr><td><img src="cid:${DONE_BEFORE_PHOTO_CID}" alt="Your bin before cleaning" style="${photoImgStyle}"></td></tr>` +
+      washGifHtml +
+      `<tr><td style="${photoLabelStyle};color:#1d7a3d">After ✨</td></tr>` +
+      `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your bin after cleaning" style="${photoImgStyle}"></td></tr>` +
       `</table>`
     : p.hasPhoto
-      ? `<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:320px;margin:16px 0">` +
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
+        washGifHtml +
         `<tr><td style="${photoLabelStyle};color:#1d7a3d">Sparkling clean ✨</td></tr>` +
-        `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your clean bin" style="width:100%;max-width:320px;border-radius:10px;display:block"></td></tr>` +
+        `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your clean bin" style="width:100%;max-width:340px;border-radius:10px;display:block"></td></tr>` +
         `</table>`
       : '';
   let chargeLine = '';

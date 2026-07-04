@@ -79,15 +79,26 @@ describe('doneTemplate', () => {
     expect(t.html).not.toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
   });
 
-  it('renders a side-by-side before/after card when both photos exist', () => {
+  it('renders the before → wash GIF → after story when both photos exist', () => {
     const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true, hasBeforePhoto: true });
     expect(t.html).toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
     expect(t.html).toContain(`cid:${DONE_AFTER_PHOTO_CID}`);
+    expect(t.html).toContain('https://www.luckyshamrock.ca/assets/bin-wash.gif');
     expect(t.html).toMatch(/before/i);
     expect(t.html).toMatch(/after/i);
-    // The before photo must appear to the left of (earlier than) the after photo.
-    expect(t.html.indexOf(`cid:${DONE_BEFORE_PHOTO_CID}`)).toBeLessThan(t.html.indexOf(`cid:${DONE_AFTER_PHOTO_CID}`));
+    // Story order: before photo, then the wash GIF, then the after photo.
+    const beforeIdx = t.html.indexOf(`cid:${DONE_BEFORE_PHOTO_CID}`);
+    const gifIdx = t.html.indexOf('bin-wash.gif');
+    const afterIdx = t.html.indexOf(`cid:${DONE_AFTER_PHOTO_CID}`);
+    expect(beforeIdx).toBeLessThan(gifIdx);
+    expect(gifIdx).toBeLessThan(afterIdx);
     expect(t.text.toLowerCase()).toContain('before');
+  });
+
+  it('shows the wash GIF above the single clean photo when no before photo exists', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
+    expect(t.html).toContain('bin-wash.gif');
+    expect(t.html.indexOf('bin-wash.gif')).toBeLessThan(t.html.indexOf(`cid:${DONE_AFTER_PHOTO_CID}`));
   });
 
   it('ignores hasBeforePhoto without hasPhoto and renders no cid refs when photoless', () => {

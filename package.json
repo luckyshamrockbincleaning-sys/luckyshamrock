@@ -19,11 +19,9 @@
     "@vercel/functions": "^3.7.0",
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.36.0",
-    "gifenc": "^1.0.3",
     "google-auth-library": "^9.15.1",
     "jose": "^5.10.0",
     "postgres": "^3.4.5",
-    "sharp": "^0.35.3",
     "stripe": "^22.2.0",
     "zod": "^3.23.8"
   },
