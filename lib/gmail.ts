@@ -126,22 +126,26 @@ export function buildRfc822Message(p: {
     `MIME-Version: 1.0`,
   ];
 
-  // Innermost: text + html alternatives.
+  // Innermost: text + html alternatives. Both are base64-encoded: our bodies
+  // contain emoji (not 7bit) and multi-KB single lines (over the 998-char SMTP
+  // limit), and declaring them "7bit" made Gmail re-encode the message — which
+  // corrupted literal `=XX` sequences in URLs (e.g. `?cid=149…` in the review
+  // link) via a bogus quoted-printable pass. base64 sidesteps all of it.
   const altBoundary = `alt_${crypto.randomUUID()}`;
   let body = [
     `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
     ``,
     `--${altBoundary}`,
     `Content-Type: text/plain; charset="UTF-8"`,
-    `Content-Transfer-Encoding: 7bit`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    p.text,
+    wrapBase64(Buffer.from(p.text, 'utf-8').toString('base64')),
     ``,
     `--${altBoundary}`,
     `Content-Type: text/html; charset="UTF-8"`,
-    `Content-Transfer-Encoding: 7bit`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    p.html,
+    wrapBase64(Buffer.from(p.html, 'utf-8').toString('base64')),
     ``,
     `--${altBoundary}--`,
   ];
