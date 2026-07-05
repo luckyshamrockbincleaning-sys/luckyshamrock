@@ -15,6 +15,7 @@ describe('generateWashGif', () => {
       beforeJpeg: await fakePhoto({ r: 90, g: 80, b: 60 }),
       afterJpeg: await fakePhoto({ r: 40, g: 120, b: 70 }),
       sprites: LEPRECHAUN_SPRITES,
+      stamps: { before: 'BEFORE · Jul 5, 2026, 2:14 p.m.', after: 'AFTER · Jul 5, 2026, 2:41 p.m.' },
     });
     // GIF89a magic + a plausible multi-frame size.
     expect(gif.subarray(0, 6).toString('ascii')).toBe('GIF89a');

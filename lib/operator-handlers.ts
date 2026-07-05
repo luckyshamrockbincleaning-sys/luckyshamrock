@@ -314,6 +314,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         visitBinCount: visit.binCount,
         subId: visit.subscriptionId,
         customerId: visit.customerId,
+        headingThereAt: visit.headingThereAt,
         email: customer.email,
         name: customer.name,
         stripeCustomerId: customer.stripeCustomerId,
@@ -445,27 +446,34 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         : charge.amount_cents === 0
           ? { kind: 'comped' }
           : { kind: 'charged', amountCents: charge.amount_cents };
-    // Photos render inline in the email body (cid: refs in the template).
-    // The before shot rides along only when the after shot exists — a
-    // "before" with nothing to compare against would be an anti-testimonial.
+    // Per-visit wash animation: the whole story lives in ONE GIF (before
+    // hold → Lucky frantically foams the photo → after reveal), with subtle
+    // corner timestamps as proof of service. When it generates, the email
+    // carries ONLY the GIF; the separate before/after photos are the
+    // fallback. Strictly best-effort — any failure degrades to the photo
+    // layout, never blocks Done (the charge has already happened above).
     const photoAttachments: EmailAttachment[] = [];
-    if (cleanPhoto.attachment) {
-      if (beforePhoto.attachment) {
-        photoAttachments.push({ ...beforePhoto.attachment, inline: true, contentId: DONE_BEFORE_PHOTO_CID });
-      }
-      photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
-    }
-    // Per-visit wash animation: Lucky foams the customer's actual before
-    // photo, then the after photo is revealed. Strictly best-effort — any
-    // failure here must degrade to the plain before/after email, never
-    // block Done (the charge has already happened above).
     let hasWashGif = false;
     if (cleanPhoto.attachment && beforePhoto.attachment) {
       try {
+        const stampTime = (d: Date) =>
+          new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Edmonton',
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          }).format(d);
         const gif = await generateWashGif({
           beforeJpeg: Buffer.from(beforePhoto.attachment.contentBase64, 'base64'),
           afterJpeg: Buffer.from(cleanPhoto.attachment.contentBase64, 'base64'),
           sprites: LEPRECHAUN_SPRITES,
+          stamps: {
+            // Before ≈ arrival ("on my way" tap); after = the Done tap.
+            before: `BEFORE · ${stampTime(row.headingThereAt ?? new Date())}`,
+            after: `AFTER · ${stampTime(new Date())}`,
+          },
         });
         photoAttachments.push({
           filename: 'lucky-wash.gif',
@@ -478,6 +486,12 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       } catch (err) {
         console.error('[operator/visit/done] wash gif failed (email falls back to photos)', err);
       }
+    }
+    if (!hasWashGif && cleanPhoto.attachment) {
+      if (beforePhoto.attachment) {
+        photoAttachments.push({ ...beforePhoto.attachment, inline: true, contentId: DONE_BEFORE_PHOTO_CID });
+      }
+      photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
     const tpl = doneTemplate({
       name: row.name,

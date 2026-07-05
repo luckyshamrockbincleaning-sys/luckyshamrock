@@ -130,24 +130,29 @@ export function doneTemplate(p: {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
   const showBeforeAfter = !!p.hasPhoto && !!p.hasBeforePhoto;
-  const photoText = showBeforeAfter
-    ? `\n\nBefore-and-after photos of your bin are attached.`
-    : p.hasPhoto
-      ? `\n\nPhoto proof is attached.`
-      : '';
+  const showWashGif = !!p.hasWashGif && !!p.hasPhoto;
+  const photoText = showWashGif
+    ? `\n\nYour before-and-after wash animation is attached.`
+    : showBeforeAfter
+      ? `\n\nBefore-and-after photos of your bin are attached.`
+      : p.hasPhoto
+        ? `\n\nPhoto proof is attached.`
+        : '';
   // Inline styles + table layout: the only combination that renders
   // consistently across Gmail, Apple Mail, and Outlook.
   const photoLabelStyle =
     'font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;padding-bottom:6px;text-align:center';
   const photoImgStyle = 'width:100%;max-width:340px;border-radius:10px;display:block;margin:0 auto';
-  const washGifHtml = p.hasWashGif
-    ? `<tr><td style="padding:12px 0"><img src="cid:${DONE_WASH_GIF_CID}" alt="Lucky giving your bin the full treatment 🍀" style="${photoImgStyle}"></td></tr>`
-    : '';
-  const photoHtml = showBeforeAfter
+  // With the wash GIF, the whole before→foam→after story is ONE image —
+  // no separate photos in the body (they'd triple up what the GIF shows).
+  const photoHtml = showWashGif
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
+      `<tr><td><img src="cid:${DONE_WASH_GIF_CID}" alt="Before and after: Lucky giving your bin the full treatment 🍀" style="${photoImgStyle}"></td></tr>` +
+      `</table>`
+    : showBeforeAfter
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:16px auto">` +
       `<tr><td style="${photoLabelStyle};color:#8a6d3b">Before</td></tr>` +
       `<tr><td><img src="cid:${DONE_BEFORE_PHOTO_CID}" alt="Your bin before cleaning" style="${photoImgStyle}"></td></tr>` +
-      washGifHtml +
       `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:12px">After ✨</td></tr>` +
       `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your bin after cleaning" style="${photoImgStyle}"></td></tr>` +
       `</table>`

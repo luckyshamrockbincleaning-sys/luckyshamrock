@@ -39,6 +39,12 @@ export interface WashGifInput {
   beforeJpeg: Buffer;
   afterJpeg: Buffer;
   sprites: WashGifSprites;
+  /**
+   * Subtle proof-of-service stamps rendered as a small corner pill inside the
+   * frames: `before` on the dirty-bin segment, `after` on the reveal. Pass
+   * preformatted strings (e.g. "BEFORE · Jul 5, 2026, 2:14 PM").
+   */
+  stamps?: { before: string; after: string } | null;
 }
 
 const W = 440; // output width; height follows the before photo's aspect
@@ -113,6 +119,27 @@ function foamSvg(w: number, h: number, coverage: number, step: number): string {
     parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="white" fill-opacity="${(0.35 + rand() * 0.3).toFixed(2)}"/>`);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${parts.join('')}</svg>`;
+}
+
+/**
+ * Small semi-transparent pill in the bottom-left corner carrying the
+ * BEFORE/AFTER timestamp — visible proof of service without shouting.
+ */
+function stampSvg(w: number, h: number, text: string): string {
+  const fontSize = 13;
+  const padX = 10;
+  const pillH = 24;
+  const pillW = Math.round(text.length * fontSize * 0.56) + padX * 2;
+  const x = 10;
+  const y = h - pillH - 10;
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+    `<rect x="${x}" y="${y}" width="${pillW}" height="${pillH}" rx="12" fill="black" fill-opacity="0.45"/>` +
+    `<text x="${x + padX}" y="${y + pillH - 8}" font-family="Helvetica, Arial, sans-serif" font-size="${fontSize}" ` +
+    `font-weight="bold" fill="white" fill-opacity="0.95">${esc}</text>` +
+    `</svg>`
+  );
 }
 
 /** Sparkles for the reveal frames. */
@@ -208,6 +235,11 @@ export async function generateWashGif(input: WashGifInput): Promise<Buffer> {
       });
     } else if (spec.sprite === 'smile' && spec.spriteX !== null) {
       overlays.push({ input: smilePng, left: spec.spriteX, top: H - smileH });
+    }
+    // Stamp goes on LAST so neither foam nor the sprite can cover it.
+    if (input.stamps) {
+      const label = spec.base === before ? input.stamps.before : input.stamps.after;
+      overlays.push({ input: Buffer.from(stampSvg(W, H, label)) });
     }
     const { data } = await sharp(spec.base)
       .composite(overlays)

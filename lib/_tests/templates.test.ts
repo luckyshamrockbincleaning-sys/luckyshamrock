@@ -90,14 +90,12 @@ describe('doneTemplate', () => {
     expect(t.text.toLowerCase()).toContain('before');
   });
 
-  it('places the wash GIF between before and after when hasWashGif is set', () => {
+  it('shows ONLY the wash GIF when hasWashGif is set (whole story in one image)', () => {
     const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true, hasBeforePhoto: true, hasWashGif: true });
-    const beforeIdx = t.html.indexOf(`cid:${DONE_BEFORE_PHOTO_CID}`);
-    const gifIdx = t.html.indexOf(`cid:${DONE_WASH_GIF_CID}`);
-    const afterIdx = t.html.indexOf(`cid:${DONE_AFTER_PHOTO_CID}`);
-    expect(gifIdx).toBeGreaterThan(-1);
-    expect(beforeIdx).toBeLessThan(gifIdx);
-    expect(gifIdx).toBeLessThan(afterIdx);
+    expect(t.html).toContain(`cid:${DONE_WASH_GIF_CID}`);
+    expect(t.html).not.toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
+    expect(t.html).not.toContain(`cid:${DONE_AFTER_PHOTO_CID}`);
+    expect(t.text.toLowerCase()).toContain('animation');
   });
 
   it('omits the wash GIF cid when hasWashGif is not set', () => {
