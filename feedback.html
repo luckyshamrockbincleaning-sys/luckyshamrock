@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Tell us what went wrong — Lucky Shamrock</title>
+  <link rel="icon" href="assets/logo.png">
+  <style>
+    body { margin: 0; font-family: 'Avenir Next', 'Segoe UI', system-ui, sans-serif; background: #f2f7f2; color: #26332a; }
+    .card { max-width: 460px; margin: 48px auto; background: #fff; border: 1px solid #e2ece2; border-radius: 12px; overflow: hidden; }
+    .head { background: #1d7a3d; padding: 18px 24px; color: #fff; font-weight: 700; font-size: 19px; }
+    .head small { display: block; font-weight: 400; font-size: 12px; color: #c9e7c9; margin-top: 2px; }
+    .body { padding: 24px; }
+    h1 { font-size: 19px; margin: 0 0 6px; }
+    p { margin: 0 0 14px; font-size: 15px; line-height: 1.5; color: #3d4a3a; }
+    textarea { width: 100%; box-sizing: border-box; min-height: 120px; padding: 12px; border: 1px solid #cdd9cd; border-radius: 8px; font: inherit; }
+    textarea:focus { outline: 2px solid #1d7a3d; }
+    button { margin-top: 12px; background: #1d7a3d; color: #fff; border: 0; border-radius: 8px; padding: 12px 20px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .done { display: none; }
+    .err { display: none; color: #7a2222; font-size: 14px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">🍀 Lucky Shamrock<small>Garbage Bin Cleaning · Fort Saskatchewan</small></div>
+    <div class="body">
+      <div id="form-view">
+        <h1>We're sorry that clean wasn't up to scratch.</h1>
+        <p>Tell us what went wrong and we'll make it right — this goes straight to the owner, not to a public review.</p>
+        <textarea id="comment" maxlength="2000" placeholder="What happened?"></textarea>
+        <div class="err" id="err">Couldn't send that — please try again.</div>
+        <button id="send">Send to the owner</button>
+      </div>
+      <div class="done" id="done-view">
+        <h1>Got it — thank you.</h1>
+        <p>The owner has your note and will follow up. If it's urgent, call <a href="tel:+15879828887">(587) 982-8887</a>.</p>
+      </div>
+    </div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const v = params.get('v'), t = params.get('t');
+    document.getElementById('send').addEventListener('click', async () => {
+      const comment = document.getElementById('comment').value.trim();
+      if (!comment) return;
+      const btn = document.getElementById('send');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      document.getElementById('err').style.display = 'none';
+      try {
+        const r = await fetch('/api/rate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ v, t, comment }),
+        });
+        if (!r.ok) throw new Error('bad status');
+        document.getElementById('form-view').style.display = 'none';
+        document.getElementById('done-view').style.display = 'block';
+      } catch (e) {
+        document.getElementById('err').style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Send to the owner';
+      }
+    });
+  </script>
+</body>
+</html>

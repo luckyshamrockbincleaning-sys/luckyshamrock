@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import handler from '../logout.js';
+import handler from '../me.js';
 import { mockReq } from './_helpers.js';
 import { SESSION_COOKIE_NAME } from '../../lib/cookies.js';
 
@@ -16,10 +16,12 @@ function mockResWithHeaders() {
   return res;
 }
 
-describe('POST /api/logout', () => {
-  it('returns 200 ok and sets a Max-Age=0 cookie that clears ls_session', async () => {
+// Logout lives on POST /api/me {op:'logout'} — the old /api/logout function
+// was folded in to free a slot under the Vercel 12-function cap.
+describe('POST /api/me {op:logout}', () => {
+  it('returns 200 ok and sets a Max-Age=0 cookie that clears ls_session, without needing a session', async () => {
     const res = mockResWithHeaders();
-    await handler(mockReq<typeof handler>({ method: 'POST' }), res);
+    await handler(mockReq<typeof handler>({ method: 'POST', body: { op: 'logout' } }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
     const cookie = res.headers['Set-Cookie'] as string;
@@ -29,9 +31,9 @@ describe('POST /api/logout', () => {
     expect(cookie).toContain('Secure');
   });
 
-  it('returns 405 for non-POST', async () => {
+  it('still rejects other unauthenticated POSTs with 401', async () => {
     const res = mockResWithHeaders();
-    await handler(mockReq<typeof handler>({ method: 'GET' }), res);
-    expect(res.statusCode).toBe(405);
+    await handler(mockReq<typeof handler>({ method: 'POST', body: {} }), res);
+    expect(res.statusCode).toBe(401);
   });
 });

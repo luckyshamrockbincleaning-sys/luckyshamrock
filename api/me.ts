@@ -4,6 +4,7 @@ import { addWeeks } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
+import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
@@ -24,6 +25,16 @@ const CADENCE_WEEKS: Record<Exclude<Cadence, 'seasonal'>, number> = {
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+
+  // POST /api/me {op:'logout'} clears the session cookie. Folded in here
+  // (replacing the old /api/logout function) to free a slot under Vercel
+  // Hobby's 12-function cap. Deliberately requires no valid session — logging
+  // out with a dead cookie should still succeed.
+  if (req.method === 'POST' && req.body?.op === 'logout') {
+    res.setHeader('Set-Cookie', formatClearSessionCookieHeader());
+    res.status(200).json({ status: 'ok' });
     return;
   }
 

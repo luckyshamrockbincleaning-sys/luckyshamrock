@@ -413,7 +413,7 @@ function ManageApp() {
 
   async function onLogout() {
     try {
-      await postJson('/api/logout');
+      await postJson('/api/me', { op: 'logout' });
     } finally {
       setState({ loading: false, me: null, error: null });
       setFlash({ kind: 'ok', text: 'Signed out.' });

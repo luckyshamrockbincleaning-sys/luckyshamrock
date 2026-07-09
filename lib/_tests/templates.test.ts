@@ -68,6 +68,21 @@ describe('doneTemplate', () => {
     expect(noReview.text.toLowerCase()).not.toContain('review');
   });
 
+  it('renders five tap-a-star links that replace the plain review link', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      reviewUrl: 'https://g.page/r/review',
+      ratingBaseUrl: 'https://www.luckyshamrock.ca/api/rate?v=abc&t=tok',
+    });
+    for (let n = 1; n <= 5; n++) {
+      expect(t.html).toContain(`stars=${n}`);
+    }
+    // The star links subsume the plain review CTA (4-5★ forwards to Google).
+    expect(t.html).not.toContain('Leave us a review');
+    expect(t.text).toContain('stars=5');
+  });
+
   it('mentions photo proof when a clean photo is attached', () => {
     const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
     expect(t.text.toLowerCase()).toContain('photo');

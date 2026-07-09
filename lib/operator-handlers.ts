@@ -25,6 +25,8 @@ import { sendAndLog } from './notifications.js';
 import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID, DONE_WASH_GIF_CID } from './email/templates.js';
 import { generateWashGif } from './wash-gif.js';
 import { LEPRECHAUN_SPRITES } from './leprechaun-sprites.js';
+import { generateReceiptPdf } from './receipt-pdf.js';
+import { signRatingToken } from './rating-token.js';
 import { isStripeConfigured } from './stripe.js';
 import { chargeOffSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
@@ -317,6 +319,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         headingThereAt: visit.headingThereAt,
         email: customer.email,
         name: customer.name,
+        street: customer.street,
+        city: customer.city,
+        postalCode: customer.postalCode,
         stripeCustomerId: customer.stripeCustomerId,
         defaultPaymentMethodId: customer.defaultPaymentMethodId,
       })
@@ -374,16 +379,17 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       ok: false,
     };
     const alreadyBilled = row.paymentStatus === 'charged' || row.paymentStatus === 'comped';
+    // Cadence + bin count are needed by both billing and the PDF receipt.
+    let cadence: Cadence | null = null;
+    let binCount = row.visitBinCount ?? 1;
+    if (row.subId) {
+      const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
+      cadence = (sub?.cadence as Cadence) ?? null;
+      binCount = sub?.binCount ?? binCount;
+    }
+    const baseCents = baseChargeCents(cadence, binCount);
     if (!alreadyBilled && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
-      let cadence: Cadence | null = null;
-      let binCount = row.visitBinCount ?? 1;
-      if (row.subId) {
-        const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
-        cadence = (sub?.cadence as Cadence) ?? null;
-        binCount = sub?.binCount ?? binCount;
-      }
-      const base = baseChargeCents(cadence, binCount);
-      const amount = finalChargeCents(base, discountCents);
+      const amount = finalChargeCents(baseCents, discountCents);
 
       if (amount <= 0) {
         // Fully discounted → comp it, no Stripe call.
@@ -493,6 +499,50 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       }
       photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
+    // PDF receipt whenever money changed hands (or was explicitly comped) on
+    // THIS tap. Regular attachment (paperclip), not inline. Best-effort.
+    if (charge.attempted && charge.ok) {
+      try {
+        const planLabel =
+          cadence === null
+            ? 'One-Time Clean'
+            : cadence === 'monthly'
+              ? 'Monthly Plan'
+              : cadence === 'seasonal'
+                ? 'Three Wash Season'
+                : cadence === 'bimonthly'
+                  ? 'Bimonthly Plan'
+                  : 'Quarterly Plan';
+        const pdf = await generateReceiptPdf({
+          receiptNumber: `LS-${visitId.slice(0, 6).toUpperCase()}`,
+          serviceDate: formatFriendlyDate(row.scheduledFor.toISOString().slice(0, 10)),
+          paidDate: formatFriendlyDate(new Date().toISOString().slice(0, 10)),
+          customerName: row.name,
+          address: `${row.street}, ${row.city} ${row.postalCode}`,
+          planLabel,
+          binCount,
+          baseCents,
+          discountCents,
+          totalCents: charge.amount_cents ?? 0,
+          outcome: (charge.amount_cents ?? 0) === 0 ? 'comped' : 'charged',
+        });
+        photoAttachments.push({
+          filename: 'LuckyShamrock-Receipt.pdf',
+          contentType: 'application/pdf',
+          contentBase64: pdf.toString('base64'),
+        });
+      } catch (err) {
+        console.error('[operator/visit/done] receipt pdf failed (email sends without it)', err);
+      }
+    }
+    // Tap-a-star rating links (visit-scoped HMAC — no login needed).
+    const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
+    let ratingBaseUrl: string | null = null;
+    try {
+      ratingBaseUrl = `${siteUrl}/api/rate?v=${encodeURIComponent(visitId)}&t=${encodeURIComponent(signRatingToken(visitId))}`;
+    } catch {
+      // SESSION_SECRET missing (local dev) → fall back to the plain review link.
+    }
     const tpl = doneTemplate({
       name: row.name,
       nextVisitDate: nextVisitDate ? formatFriendlyDate(nextVisitDate) : null,
@@ -500,6 +550,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       hasPhoto: !!cleanPhoto.attachment,
       hasBeforePhoto: !!cleanPhoto.attachment && !!beforePhoto.attachment,
       hasWashGif,
+      ratingBaseUrl,
       charge: emailCharge,
     });
     const result = await sendAndLog({

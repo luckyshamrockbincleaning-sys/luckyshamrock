@@ -117,6 +117,12 @@ export function doneTemplate(p: {
    */
   hasWashGif?: boolean;
   /**
+   * Base URL for the tap-a-star rating links (…/api/rate?v=…&t=…). The
+   * template appends &stars=1..5. When set, the star row REPLACES the plain
+   * review link — 4-5 star taps forward to the Google review anyway.
+   */
+  ratingBaseUrl?: string | null;
+  /**
    * Payment outcome for this clean — the email doubles as the customer's
    * receipt, since charging happens silently on the operator's Done tap.
    * - charged: card billed `amountCents` (include the amount).
@@ -172,10 +178,29 @@ export function doneTemplate(p: {
   }
   const chargeText = chargeLine ? `\n\n${chargeLine}` : '';
   const chargeHtml = chargeLine ? `<p>${escapeHtml(chargeLine)}</p>` : '';
-  const reviewText = p.reviewUrl
+  // Star row beats the plain review link when a rating URL exists: one tap
+  // records the rating in-place, and happy taps continue on to Google.
+  const starsHtml = p.ratingBaseUrl
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px auto 4px"><tr>` +
+      `<td style="font-size:14px;color:#3d4a3a;padding-right:10px">How did we do?</td>` +
+      [1, 2, 3, 4, 5]
+        .map(
+          (n) =>
+            `<td><a href="${escapeAttr(`${p.ratingBaseUrl}&stars=${n}`)}" ` +
+            `style="text-decoration:none;font-size:26px;line-height:1;padding:0 3px" ` +
+            `aria-label="Rate ${n} star${n > 1 ? 's' : ''}">⭐</a></td>`,
+        )
+        .join('') +
+      `</tr></table>` +
+      `<p style="text-align:center;font-size:12px;color:#8a998a;margin:0 0 8px">Tap a star — one tap is all it takes.</p>`
+    : '';
+  const starsText = p.ratingBaseUrl
+    ? `\n\nHow did we do? Rate us with one tap: ${p.ratingBaseUrl}&stars=5`
+    : '';
+  const reviewText = !p.ratingBaseUrl && p.reviewUrl
     ? `\n\nLoved it? Leave us a review: ${p.reviewUrl}`
     : '';
-  const reviewHtml = p.reviewUrl
+  const reviewHtml = !p.ratingBaseUrl && p.reviewUrl
     ? `<p><a href="${escapeAttr(p.reviewUrl)}">Loved it? Leave us a review →</a></p>`
     : '';
   const text =
@@ -183,6 +208,7 @@ export function doneTemplate(p: {
     `Garbage bin cleaned. ${nextLine}` +
     chargeText +
     photoText +
+    starsText +
     reviewText +
     `\n\n` +
     FOOTER_TEXT;
@@ -191,6 +217,7 @@ export function doneTemplate(p: {
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
     chargeHtml +
     photoHtml +
+    starsHtml +
     reviewHtml,
   );
   return { subject, html, text };
@@ -254,6 +281,35 @@ export function operatorNewBookingTemplate(p: {
     rows.map(([k, v]) => `<tr><td style="color:#888;padding-right:12px">${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('') +
     `</table>` +
     `<p><a href="https://www.luckyshamrock.ca/ops" style="color:#1d7a3d;font-weight:bold">Open the operator dashboard →</a></p>`,
+  );
+  return { subject, html, text };
+}
+
+/**
+ * Internal alert: a customer tapped 1-3 stars and left a comment. This is the
+ * complaint that would otherwise have been a public review — treat as urgent.
+ */
+export function operatorFeedbackTemplate(p: {
+  name: string;
+  email: string;
+  phone: string | null;
+  rating: number | null;
+  comment: string;
+  visitDate: string;
+}): RenderedEmail {
+  const starsLabel = p.rating ? `${p.rating}★` : 'unrated';
+  const subject = `⚠️ ${starsLabel} feedback from ${p.name}`;
+  const text =
+    `${p.name} rated their ${p.visitDate} clean ${starsLabel} and said:\n\n` +
+    `"${p.comment}"\n\n` +
+    `Reply to them: ${p.email}` +
+    (p.phone ? ` · ${p.phone}` : '') +
+    `\n\nA quick follow-up now usually turns this around before it becomes a public review.`;
+  const html = brandWrap(
+    `<p><strong>${escapeHtml(p.name)}</strong> rated their ${escapeHtml(p.visitDate)} clean <strong>${escapeHtml(starsLabel)}</strong> and said:</p>` +
+    `<blockquote style="margin:12px 0;padding:12px 16px;background:#f6f3ec;border-left:3px solid #a06b2a">${escapeHtml(p.comment)}</blockquote>` +
+    `<p>Reply to them: <a href="mailto:${escapeAttr(p.email)}">${escapeHtml(p.email)}</a>${p.phone ? ` · ${escapeHtml(p.phone)}` : ''}</p>` +
+    `<p style="color:#666">A quick follow-up now usually turns this around before it becomes a public review.</p>`,
   );
   return { subject, html, text };
 }

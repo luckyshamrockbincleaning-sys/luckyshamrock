@@ -55,6 +55,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'day_before',
   'operator_new_booking', // internal: tells the operator a booking landed
   'refund', // customer refund receipt, triggered by the charge.refunded webhook
+  'operator_feedback', // internal: a customer left a low-star rating comment
 ]);
 
 // Per-visit billing state (Phase 6 — Stripe).
@@ -148,6 +149,11 @@ export const visit = pgTable(
     headingThereAt: timestamp('heading_there_at', { withTimezone: true }),
     doneAt: timestamp('done_at', { withTimezone: true }),
     notes: text('notes'),
+    // Customer star rating from the done email (1-5, tap-a-star). 4-5 stars
+    // funnel on to Google; 1-3 collect a private comment instead.
+    rating: integer('rating'),
+    ratingComment: text('rating_comment'),
+    ratedAt: timestamp('rated_at', { withTimezone: true }),
     // Billing state for this visit (Phase 6). Default unpaid until charged on Done.
     paymentStatus: paymentStatusEnum('payment_status').notNull().default('unpaid'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
