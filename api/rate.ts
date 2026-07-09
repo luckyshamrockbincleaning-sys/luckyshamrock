@@ -40,8 +40,11 @@ async function handleStars(req: VercelRequest, res: VercelResponse): Promise<voi
   const v = typeof req.query.v === 'string' ? req.query.v : '';
   const t = typeof req.query.t === 'string' ? req.query.t : '';
   const stars = Number(req.query.stars);
+  // GET is customer-facing (a tap from their inbox) — NEVER show raw JSON.
+  // Anything wrong with the link (forged, malformed, or the visit is gone)
+  // quietly lands on the website instead.
   if (!verifyRatingToken(v, t) || !Number.isInteger(stars) || stars < 1 || stars > 5) {
-    res.status(400).json({ status: 'invalid', message: 'This rating link is not valid.' });
+    res.status(302).setHeader('Location', SITE()).end();
     return;
   }
   try {
@@ -52,7 +55,7 @@ async function handleStars(req: VercelRequest, res: VercelResponse): Promise<voi
       .where(eq(visit.id, v))
       .returning({ id: visit.id });
     if (!row) {
-      res.status(404).json({ status: 'not_found' });
+      res.status(302).setHeader('Location', SITE()).end();
       return;
     }
     if (stars >= 4) {
@@ -67,7 +70,7 @@ async function handleStars(req: VercelRequest, res: VercelResponse): Promise<voi
     }
   } catch (err) {
     console.error('[rate] stars failed', err);
-    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+    res.status(302).setHeader('Location', SITE()).end();
   }
 }
 

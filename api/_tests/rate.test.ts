@@ -78,20 +78,29 @@ describe('GET /api/rate (tap-a-star)', () => {
     expect(v!.rating).toBe(2);
   });
 
-  it('rejects a forged token without touching the visit', async () => {
+  it('quietly redirects a forged token to the site without touching the visit', async () => {
     const { visitId } = await seedDoneVisit();
     const res = mockRes();
     await handler({ method: 'GET', query: { v: visitId, t: 'forged-token-aaaaaaaaaaaa', stars: '5' } } as any, res);
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.Location).toBe('https://www.luckyshamrock.ca');
     const [v] = await getDb().select().from(visit).where(eq(visit.id, visitId));
     expect(v!.rating).toBeNull();
   });
 
-  it('rejects out-of-range stars', async () => {
+  it('quietly redirects out-of-range stars to the site', async () => {
     const { visitId } = await seedDoneVisit();
     const res = mockRes();
     await handler({ method: 'GET', query: { v: visitId, t: signRatingToken(visitId), stars: '9' } } as any, res);
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(302);
+  });
+
+  it('quietly redirects when the visit no longer exists (old test emails, wiped data)', async () => {
+    const ghost = crypto.randomUUID();
+    const res = mockRes();
+    await handler({ method: 'GET', query: { v: ghost, t: signRatingToken(ghost), stars: '5' } } as any, res);
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.Location).toBe('https://www.luckyshamrock.ca');
   });
 });
 
