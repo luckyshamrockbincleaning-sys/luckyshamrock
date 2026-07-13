@@ -131,6 +131,50 @@ async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
   };
 }
 
+// Persist prepared photos across tab reloads. On phones, switching to the
+// camera or to Google Maps ("On my way") can make Android silently reload
+// this tab — without this, a selected before-photo evaporates and the
+// customer's email loses the wash animation. localStorage, keyed per visit,
+// cleared on Done and aged out after a day.
+const PHOTO_STORE_PREFIX = 'ls-ops-photos-';
+
+function savedPhotos(visitId) {
+  try {
+    const raw = localStorage.getItem(PHOTO_STORE_PREFIX + visitId);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data.ts || Date.now() - data.ts > 24 * 60 * 60 * 1000) return null;
+    return data;
+  } catch (e) { return null; }
+}
+
+function persistPhoto(visitId, kind, photo, filename) {
+  try {
+    const cur = savedPhotos(visitId) || { ts: Date.now() };
+    cur[kind] = { photo, filename };
+    cur.ts = Date.now();
+    localStorage.setItem(PHOTO_STORE_PREFIX + visitId, JSON.stringify(cur));
+  } catch (e) { /* storage full/blocked — degrade silently */ }
+}
+
+function clearPhotos(visitId) {
+  try { localStorage.removeItem(PHOTO_STORE_PREFIX + visitId); } catch (e) {}
+}
+
+function purgeStalePhotoStores() {
+  try {
+    const now = Date.now();
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(PHOTO_STORE_PREFIX)) {
+        const data = JSON.parse(localStorage.getItem(key) || '{}');
+        if (!data.ts || now - data.ts > 24 * 60 * 60 * 1000) localStorage.removeItem(key);
+      }
+    }
+  } catch (e) {}
+}
+purgeStalePhotoStores();
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
@@ -138,8 +182,18 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const heading = stop.status === 'heading_there';
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
-  const [photoState, setPhotoState] = useState({ phase: 'idle', photo: null, filename: '', message: '' });
-  const [beforeState, setBeforeState] = useState({ phase: 'idle', photo: null, filename: '', message: '' });
+  const [photoState, setPhotoState] = useState(() => {
+    const saved = savedPhotos(stop.id);
+    return saved?.clean
+      ? { phase: 'ready', photo: saved.clean.photo, filename: saved.clean.filename, message: 'Photo restored.' }
+      : { phase: 'idle', photo: null, filename: '', message: '' };
+  });
+  const [beforeState, setBeforeState] = useState(() => {
+    const saved = savedPhotos(stop.id);
+    return saved?.before
+      ? { phase: 'ready', photo: saved.before.photo, filename: saved.before.filename, message: 'Photo restored.' }
+      : { phase: 'idle', photo: null, filename: '', message: '' };
+  });
   const pay = PAY_BADGE[stop.payment_status];
 
   function doneWithDiscount() {
@@ -147,11 +201,20 @@ function StopCard({ stop, onAction, busy, showDate }) {
       setPhotoState((s) => ({ ...s, phase: 'error', message: 'Take a clean-bin photo before tapping Done.' }));
       return;
     }
+    // No before photo means no wash animation in the customer's email — that
+    // is sometimes intentional, but never let it happen silently.
+    if (!beforeState.photo) {
+      const proceed = window.confirm(
+        'No BEFORE photo attached — the customer will get the plain clean photo instead of the wash animation. Finish anyway?',
+      );
+      if (!proceed) return;
+    }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
     const payload = { discount_cents, clean_photo: photoState.photo };
-    // Optional before shot → customer gets the side-by-side card in the email.
+    // Optional before shot → customer gets the wash animation in the email.
     if (beforeState.photo) payload.before_photo = beforeState.photo;
+    clearPhotos(stop.id);
     onAction('done', stop, payload);
   }
 
@@ -161,6 +224,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
     setPhotoState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
     try {
       const photo = await prepareCleanPhoto(file);
+      persistPhoto(stop.id, 'clean', photo, file.name);
       setPhotoState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
     } catch (err) {
       setPhotoState({
@@ -178,6 +242,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
     setBeforeState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
     try {
       const photo = await prepareCleanPhoto(file, 'before-bin.jpg');
+      persistPhoto(stop.id, 'before', photo, file.name);
       setBeforeState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
     } catch (err) {
       setBeforeState({
