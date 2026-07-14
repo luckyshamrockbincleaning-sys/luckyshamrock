@@ -175,6 +175,51 @@ function purgeStalePhotoStores() {
 }
 purgeStalePhotoStores();
 
+// One photo capture step with a live thumbnail + captured/ missing state, so
+// the operator can SEE at a glance which shots are attached before tapping Done.
+function PhotoStep({ n, title, hint, state, onChange, busy }) {
+  const ready = state.phase === 'ready' && state.photo;
+  const thumb = ready ? `data:${state.photo.mime_type};base64,${state.photo.content_base64}` : null;
+  return (
+    <div
+      className="ops-photo"
+      style={{
+        marginTop: 12,
+        border: `1px solid ${ready ? '#1f7a1f' : 'rgba(0,0,0,0.12)'}`,
+        borderRadius: 10,
+        padding: 12,
+        background: ready ? 'var(--green-soft, #eef6ef)' : 'transparent',
+      }}
+    >
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 20, height: 20, borderRadius: '50%', fontSize: 12, color: '#fff',
+          background: ready ? '#1f7a1f' : '#9aa79a',
+        }}>{ready ? '✓' : n}</span>
+        {title}
+      </label>
+      <div style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)', marginBottom: 8 }}>{hint}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {thumb && <img src={thumb} alt="" style={{ width: 54, height: 54, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />}
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          disabled={busy}
+          onChange={onChange}
+          style={{ width: '100%', minWidth: 0 }}
+        />
+      </div>
+      {state.message && (
+        <div style={{ marginTop: 6, fontSize: 12, color: state.phase === 'error' ? '#7A2222' : 'var(--ink-3, #6b6b6b)' }}>
+          {state.filename ? `${state.filename} · ` : ''}{state.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
@@ -205,7 +250,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
     // is sometimes intentional, but never let it happen silently.
     if (!beforeState.photo) {
       const proceed = window.confirm(
-        'No BEFORE photo attached — the customer will get the plain clean photo instead of the wash animation. Finish anyway?',
+        'No BEFORE photo (Step 1) — the customer will NOT get the leprechaun wash animation, just the plain after photo.\n\nTap Cancel to add the before photo, or OK to finish without it.',
       );
       if (!proceed) return;
     }
@@ -279,53 +324,25 @@ function StopCard({ stop, onAction, busy, showDate }) {
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
 
       {!isDone && !isCancelled && (
-        <div className="ops-photo" style={{ marginTop: 12 }}>
-          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
-            Before photo (optional — snap when you arrive)
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            disabled={busy}
-            onChange={onBeforePhotoChange}
-            style={{ width: '100%' }}
-          />
-          {beforeState.message && (
-            <div style={{
-              marginTop: 6,
-              fontSize: 12,
-              color: beforeState.phase === 'error' ? '#7A2222' : 'var(--ink-3, #6b6b6b)',
-            }}>
-              {beforeState.filename ? `${beforeState.filename} · ` : ''}{beforeState.message}
-            </div>
-          )}
-        </div>
+        <PhotoStep
+          n={1}
+          title="Before photo"
+          hint="Snap the dirty bin when you arrive — this is what makes the wash animation."
+          state={beforeState}
+          onChange={onBeforePhotoChange}
+          busy={busy}
+        />
       )}
 
       {!isDone && !isCancelled && (
-        <div className="ops-photo" style={{ marginTop: 12 }}>
-          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
-            Clean-bin photo
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            disabled={busy}
-            onChange={onPhotoChange}
-            style={{ width: '100%' }}
-          />
-          {photoState.message && (
-            <div style={{
-              marginTop: 6,
-              fontSize: 12,
-              color: photoState.phase === 'error' ? '#7A2222' : 'var(--ink-3, #6b6b6b)',
-            }}>
-              {photoState.filename ? `${photoState.filename} · ` : ''}{photoState.message}
-            </div>
-          )}
-        </div>
+        <PhotoStep
+          n={2}
+          title="After photo"
+          hint="Snap the clean bin. Required to finish."
+          state={photoState}
+          onChange={onPhotoChange}
+          busy={busy}
+        />
       )}
 
       {!isDone && !isCancelled && (

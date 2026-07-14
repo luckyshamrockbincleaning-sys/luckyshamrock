@@ -458,9 +458,21 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // carries ONLY the GIF; the separate before/after photos are the
     // fallback. Strictly best-effort — any failure degrades to the photo
     // layout, never blocks Done (the charge has already happened above).
+    // Ground-truth telemetry: exactly what photos reached the server on this
+    // Done. Lets us tell "operator skipped the before photo" apart from "GIF
+    // generation failed" without guessing from the customer's inbox.
+    console.log(
+      '[operator/visit/done] photos',
+      JSON.stringify({
+        visitId,
+        before: beforePhoto.attachment ? Math.round(beforePhoto.attachment.contentBase64.length * 0.75) : 0,
+        clean: cleanPhoto.attachment ? Math.round(cleanPhoto.attachment.contentBase64.length * 0.75) : 0,
+      }),
+    );
     const photoAttachments: EmailAttachment[] = [];
     let hasWashGif = false;
     if (cleanPhoto.attachment && beforePhoto.attachment) {
+      const gifStart = Date.now();
       try {
         const stampTime = (d: Date) =>
           new Intl.DateTimeFormat('en-CA', {
@@ -489,8 +501,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           contentId: DONE_WASH_GIF_CID,
         });
         hasWashGif = true;
+        console.log(`[operator/visit/done] wash gif ok in ${Date.now() - gifStart}ms (${Math.round(gif.length / 1024)}KB)`);
       } catch (err) {
-        console.error('[operator/visit/done] wash gif failed (email falls back to photos)', err);
+        console.error(`[operator/visit/done] wash gif failed after ${Date.now() - gifStart}ms (email falls back to photos)`, err);
       }
     }
     if (!hasWashGif && cleanPhoto.attachment) {
