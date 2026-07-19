@@ -12,3 +12,8 @@ window.LS_PRICING = {
   seasonalPerWash: 35, // billed per wash (105 / 3)
   extraBinPerClean: 12, // each additional bin, per clean
 };
+
+// Business launch day — cleans can't be scheduled before this. The booking
+// calendar, schedule previews, and the site banner all read it; it becomes
+// inert once the date passes.
+window.LS_LAUNCH_DATE = '2026-07-23';

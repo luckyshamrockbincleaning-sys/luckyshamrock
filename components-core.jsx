@@ -134,6 +134,22 @@ const CleanBin = ({ size = 200 }) => (
 );
 
 // ===== Nav =====
+// Pre-launch announcement bar. Renders only before launch day, then
+// disappears on its own — no cleanup deploy needed.
+const LaunchBanner = () => {
+  const [y, m, d] = (window.LS_LAUNCH_DATE || '2026-07-23').split('-').map(Number);
+  const launch = new Date(y, m - 1, d);
+  if (new Date() >= launch) return null;
+  const nice = launch.toLocaleDateString('en-CA', { month: 'long', day: 'numeric' });
+  return (
+    <div className="launch-banner" role="status">
+      <span className="launch-banner-inner">
+        🍀 <strong>First cleans start {nice}</strong> — pre-book now and be first on the route
+      </span>
+    </div>
+  );
+};
+
 const Nav = ({ tweaks, onBookClick }) => (
   <nav className="nav">
     <div className="nav-inner">
@@ -213,4 +229,5 @@ const Hero = ({ tweaks, onBookClick }) => (
 window.Icon = Icon;
 window.CleanBin = CleanBin;
 window.Nav = Nav;
+window.LaunchBanner = LaunchBanner;
 window.Hero = Hero;

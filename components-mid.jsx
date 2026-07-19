@@ -77,9 +77,9 @@ const Pricing = ({ tweaks, onBookClick }) => {
       sub: "Fresh through every season.",
       price: P.seasonalSeason, unit: "per first garbage bin · 3 washes/yr",
       features: [
-        "Apr/May — start the season fresh",
-        "Jul/Aug — keep clean through the heat",
-        "Sept/Oct — finish the season fresh",
+        "May — kick off the season fresh",
+        "July — keep clean through the heat",
+        "September — finish the season strong",
         "Trash-day timing · cancel anytime",
       ],
     }

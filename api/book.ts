@@ -16,13 +16,14 @@ import {
 } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 import { formatFriendlyDate } from '../lib/dates.js';
+import { effectiveStartDate } from '../lib/launch.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
   monthly: 12,
   bimonthly: 6,
   quarterly: 4,
-  seasonal: 3, // Three Wash Season — 3 cleans/year (Apr, Jul, Sep)
+  seasonal: 3, // Three Wash Season — 3 cleans/year (May, Jul, Sep)
 };
 
 const paymentSetupRequestSchema = z.object({
@@ -179,7 +180,9 @@ export default async function handler(
 
     // Prepare the rows (pure — no I/O yet). The inserts run inside the
     // transaction below so a mid-flight failure can't leave orphan rows.
-    const startDate = new Date();
+    // Floored to the day before launch (2026-07-23) so pre-orders can't
+    // schedule a clean before routes exist. No-op after launch day.
+    const startDate = effectiveStartDate();
     let subscriptionId: string | null = null;
     let cadence: Cadence | null = null;
     let visitDates: Date[];

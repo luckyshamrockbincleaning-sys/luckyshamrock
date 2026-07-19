@@ -35,6 +35,7 @@ function App() {
 
   return (
     <div className="app">
+      <LaunchBanner/>
       <Nav tweaks={tweaks} onBookClick={scrollToBook}/>
       <Hero tweaks={tweaks} onBookClick={scrollToBook}/>
       <HowItWorks onBookClick={scrollToBook}/>

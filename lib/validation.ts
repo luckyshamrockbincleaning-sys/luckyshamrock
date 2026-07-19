@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LAUNCH_DATE_ISO } from './launch.js';
 
 const emailField = z
   .string()
@@ -83,6 +84,13 @@ export const bookRequestSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'oneoff_date cannot be in the past',
+        path: ['oneoff_date'],
+      });
+    }
+    if (data.oneoff_date < LAUNCH_DATE_ISO) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `we start cleaning on ${LAUNCH_DATE_ISO} — pick that day or later`,
         path: ['oneoff_date'],
       });
     }

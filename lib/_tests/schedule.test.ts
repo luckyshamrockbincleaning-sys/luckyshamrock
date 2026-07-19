@@ -112,16 +112,16 @@ describe('generateVisitDates', () => {
 });
 
 describe('generateSeasonalDates (Three Wash Season)', () => {
-  // Season windows: clean falls in Apr/May, Jul/Aug, Sept/Oct. We anchor each
-  // wash to the FIRST clean-day (pickup_day + 1) on/after the 1st of the season's
-  // lead month (April, July, September) in the relevant year.
+  // Season = May–September. We anchor each wash to the FIRST clean-day
+  // (pickup_day + 1) on/after the 1st of the season's lead month (May, July,
+  // September) in the relevant year.
   it('produces 3 washes in season months for a mid-season start', () => {
     // Start Mon Jun 1, 2026, pickup = wednesday (clean = thursday).
     const dates = generateSeasonalDates({ startDate: d('2026-06-01'), pickupDay: 'wednesday', count: 3 });
     expect(dates).toHaveLength(3);
     const months = dates.map((x) => x.getUTCMonth() + 1);
-    // remaining seasons this year after June: July(7) and Sept(9), then next April(4)
-    expect(months).toEqual([7, 9, 4]);
+    // remaining seasons this year after June: July(7) and Sept(9), then next May(5)
+    expect(months).toEqual([7, 9, 5]);
     // each is a Thursday (clean day for a Wed pickup)
     dates.forEach((x) => expect(x.getUTCDay()).toBe(4));
   });
@@ -132,14 +132,14 @@ describe('generateSeasonalDates (Three Wash Season)', () => {
     expect(iso(dates[0]!)).toBe('2026-07-02');
     // Sept 2026: 1st is Tue; first Thursday on/after Sep 1 is Sep 3.
     expect(iso(dates[1]!)).toBe('2026-09-03');
-    // April 2027: 1st is Thu; first Thursday on/after Apr 1 is Apr 1.
-    expect(iso(dates[2]!)).toBe('2027-04-01');
+    // May 2027: 1st is Sat; first Thursday on/after May 1 is May 6.
+    expect(iso(dates[2]!)).toBe('2027-05-06');
   });
 
-  it('a start before April yields April, July, September of the same year', () => {
+  it('a start before May yields May, July, September of the same year', () => {
     const dates = generateSeasonalDates({ startDate: d('2026-02-10'), pickupDay: 'monday', count: 3 });
     const months = dates.map((x) => x.getUTCMonth() + 1);
-    expect(months).toEqual([4, 7, 9]);
+    expect(months).toEqual([5, 7, 9]);
     dates.forEach((x) => expect(x.getUTCDay()).toBe(2)); // Tue clean for Mon pickup
   });
 
@@ -149,7 +149,7 @@ describe('generateSeasonalDates (Three Wash Season)', () => {
     const years = dates.map((x) => x.getUTCFullYear());
     const months = dates.map((x) => x.getUTCMonth() + 1);
     expect(years).toEqual([2027, 2027, 2027]);
-    expect(months).toEqual([4, 7, 9]);
+    expect(months).toEqual([5, 7, 9]);
   });
 
   it('throws when count is < 1', () => {

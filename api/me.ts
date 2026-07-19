@@ -6,6 +6,7 @@ import { customer, subscription, visit } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
 import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
+import { effectiveStartDate } from '../lib/launch.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 
@@ -123,7 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           .where(eq(visit.subscriptionId, sub.id))
           .orderBy(desc(visit.scheduledFor))
           .limit(1);
-        const anchorDate = anchor?.scheduledFor ?? today;
+        const anchorDate = effectiveStartDate(anchor?.scheduledFor ?? today);
         let newDates: Date[];
         if (sub.cadence === 'seasonal') {
           // Seasonal: extend with the next `deficit` Apr/Jul/Sep washes after the anchor.

@@ -75,7 +75,7 @@ describe('POST /api/book — happy path', () => {
     expect(c!.binLocation).toBe('garage');
   });
 
-  it('creates a seasonal (Three Wash Season) subscription with 3 visits in Apr/Jul/Sep', async () => {
+  it('creates a seasonal (Three Wash Season) subscription with 3 visits in May/Jul/Sep', async () => {
     const req = mockReq<typeof handler>({
       method: 'POST',
       body: { ...validBody, plan: 'seasonal' },
@@ -92,9 +92,9 @@ describe('POST /api/book — happy path', () => {
 
     const visits = await db.select().from(visit).where(eq(visit.customerId, c!.id));
     expect(visits).toHaveLength(3);
-    // Each visit lands in a season window: April, July, or September.
+    // Each visit lands in a season window: May, July, or September.
     const months = visits.map((v) => v.scheduledFor.getUTCMonth() + 1).sort((a, b) => a - b);
-    months.forEach((m) => expect([4, 7, 9]).toContain(m));
+    months.forEach((m) => expect([5, 7, 9]).toContain(m));
   });
 
   it('creates a one-off visit with no subscription', async () => {

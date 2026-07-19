@@ -13,7 +13,7 @@ const DAY_INDEX: Record<PickupDay, number> = {
 };
 
 // Rolling cadences (interval in weeks). 'seasonal' is NOT here — it uses
-// generateSeasonalDates with fixed Apr/Jul/Sep windows, not a fixed interval.
+// generateSeasonalDates with fixed May/Jul/Sep windows, not a fixed interval.
 const CADENCE_WEEKS: Record<Exclude<Cadence, 'seasonal'>, number> = {
   monthly: 4,
   bimonthly: 8,
@@ -51,7 +51,7 @@ export function generateVisitDates(input: GenerateVisitDatesInput): Date[] {
     throw new Error('count must be at least 1');
   }
   if (cadence === 'seasonal') {
-    // Seasonal plans use fixed Apr/Jul/Sep windows, not a rolling interval.
+    // Seasonal plans use fixed May/Jul/Sep windows, not a rolling interval.
     throw new Error('use generateSeasonalDates for the seasonal cadence');
   }
 
@@ -71,14 +71,15 @@ export function generateVisitDates(input: GenerateVisitDatesInput): Date[] {
 // Three Wash Season — fixed seasonal scheduling
 //
 // Three cleans a year, pinned to seasonal windows rather than a rolling
-// interval: spring (Apr/May), mid-summer (Jul/Aug), and fall (Sept/Oct). Each
+// interval within the May–September season: late spring (May), mid-summer
+// (Jul/Aug), and late summer (Sept). Each
 // wash anchors to the first clean-day (pickup_day + 1) on/after the 1st of the
-// season's LEAD month (April, July, September). UTC-based throughout — visits
+// season's LEAD month (May, July, September). UTC-based throughout — visits
 // are stored date-only.
 // ─────────────────────────────────────────────────────────────────────
 
-// 0-based month index of each season's lead month: April, July, September.
-const SEASON_LEAD_MONTHS = [3, 6, 8] as const;
+// 0-based month index of each season's lead month: May, July, September.
+const SEASON_LEAD_MONTHS = [4, 6, 8] as const;
 
 export interface GenerateSeasonalDatesInput {
   startDate: Date;
@@ -97,7 +98,7 @@ function firstWeekdayOnOrAfter(from: Date, targetDow: number): Date {
 
 /**
  * Returns `count` seasonal clean-days strictly after `startDate`, walking
- * forward through April→July→September windows year over year. Clean day =
+ * forward through May→July→September windows year over year. Clean day =
  * pickup_day + 1.
  */
 export function generateSeasonalDates(input: GenerateSeasonalDatesInput): Date[] {

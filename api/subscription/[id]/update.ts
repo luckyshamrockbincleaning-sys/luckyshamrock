@@ -6,6 +6,7 @@ import { getDb } from '../../../db/client.js';
 import { customer, subscription, visit } from '../../../db/schema.js';
 import { getSessionCustomerId } from '../../../lib/session.js';
 import { generateVisitDates, generateSeasonalDates, type Cadence } from '../../../lib/schedule.js';
+import { effectiveStartDate } from '../../../lib/launch.js';
 
 const updateSchema = z
   .object({
@@ -68,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    const today = new Date();
+    const today = effectiveStartDate(); // floored pre-launch; no-op after 2026-07-23
     today.setUTCHours(0, 0, 0, 0);
 
     const cadenceChanged = parsed.data.cadence !== undefined && parsed.data.cadence !== sub.cadence;

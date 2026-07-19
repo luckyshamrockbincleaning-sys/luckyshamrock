@@ -57,14 +57,29 @@ function WaitlistCapture({ email, postalCode, message }) {
 // Pickup day-of-week → date-fns-style index (0=Sun..6=Sat)
 const PICKUP_DOW = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5 };
 const PICKUP_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-const CADENCE_INTERVAL = { monthly: 'every 4 weeks', 'three-wash': '3 cleans a year (spring, summer, fall)' };
+const CADENCE_INTERVAL = { monthly: 'every 4 weeks', 'three-wash': '3 cleans a year (May–September)' };
 
-// First clean = day after the NEXT pickup-day-of-week strictly after today.
-// Mirrors lib/schedule.ts so the preview matches the booking confirmation.
-function firstCleanDate(pickupDay) {
-  if (!pickupDay) return null;
+// Launch floor: schedules can't start before July 23 (mirrors lib/launch.ts).
+// scheduleBase() = today, but never earlier than launch − 1 day (the schedule
+// helpers return dates strictly AFTER their base). Inert after launch passes.
+function launchDate() {
+  const [y, m, d] = (window.LS_LAUNCH_DATE || '2026-07-23').split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function scheduleBase() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const floor = launchDate();
+  floor.setDate(floor.getDate() - 1);
+  return today < floor ? floor : today;
+}
+
+// First clean = day after the NEXT pickup-day-of-week strictly after the
+// schedule base. Mirrors lib/schedule.ts so the preview matches the booking
+// confirmation.
+function firstCleanDate(pickupDay) {
+  if (!pickupDay) return null;
+  const today = scheduleBase();
   const target = PICKUP_DOW[pickupDay];
   let delta = target - today.getDay();
   if (delta <= 0) delta += 7;
@@ -73,13 +88,12 @@ function firstCleanDate(pickupDay) {
   return clean;
 }
 
-// Seasonal preview: first clean-day (pickup+1) on/after the next Apr/Jul/Sep
-// lead month strictly after today. Mirrors lib/schedule.ts generateSeasonalDates.
-const SEASON_LEAD_MONTHS = [3, 6, 8]; // Apr, Jul, Sep (0-based)
+// Seasonal preview: first clean-day (pickup+1) on/after the next May/Jul/Sep
+// lead month strictly after the schedule base. Mirrors lib/schedule.ts.
+const SEASON_LEAD_MONTHS = [4, 6, 8]; // May, Jul, Sep (0-based)
 function firstSeasonalDate(pickupDay) {
   if (!pickupDay) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = scheduleBase();
   const cleanDow = (PICKUP_DOW[pickupDay] + 1) % 7;
   for (let year = today.getFullYear(); year <= today.getFullYear() + 1; year++) {
     for (const m of SEASON_LEAD_MONTHS) {
@@ -162,7 +176,8 @@ const Booking = ({ tweaks }) => {
       d.setDate(start.getDate() + i);
       const past = d < t0;
       const isSun = d.getDay() === 0; // no Sunday service
-      arr.push({ date: d, day: d.getDate(), disabled: past || isSun });
+      const preLaunch = d < launchDate(); // routes start July 23
+      arr.push({ date: d, day: d.getDate(), disabled: past || isSun || preLaunch });
     }
     return arr;
   }, []);
