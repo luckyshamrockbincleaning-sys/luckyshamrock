@@ -52,6 +52,12 @@ const cleanPhotoSchema = z.object({
   mime_type: z.string().trim().min(1).max(80),
   content_base64: z.string().trim().min(1),
 });
+const donePaymentSchema = z.object({
+  payment_method: z.enum(['card_on_file', 'cash', 'terminal', 'qr']).default('card_on_file'),
+  // Operator override for doorstep deals ("$40 cash"). Server still floors it
+  // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
+  amount_cents: z.number().int().min(0).max(100_000).optional(),
+});
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -295,6 +301,15 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const discountCents = Number.isFinite(req.body?.discount_cents)
     ? Math.max(0, Math.trunc(req.body.discount_cents))
     : 0;
+  const paymentParsed = donePaymentSchema.safeParse({
+    payment_method: req.body?.payment_method,
+    amount_cents: req.body?.amount_cents,
+  });
+  if (!paymentParsed.success) {
+    res.status(400).json({ status: 'invalid', message: 'payment_method or amount_cents is invalid' });
+    return;
+  }
+  const paymentMethod = paymentParsed.data.payment_method;
   const cleanPhoto = parsePhotoAttachment(req.body?.clean_photo, 'clean_photo');
   if (!cleanPhoto.ok) {
     res.status(400).json({ status: 'invalid', message: cleanPhoto.message });
@@ -388,7 +403,27 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       binCount = sub?.binCount ?? binCount;
     }
     const baseCents = baseChargeCents(cadence, binCount);
-    if (!alreadyBilled && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
+    // Doorstep settlement: the operator collected in person. No Stripe call —
+    // the money is already in hand (cash) or captured in the Stripe app
+    // (terminal, reconciled there by amount/time).
+    if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
+      const amount = finalChargeCents(
+        paymentParsed.data.amount_cents ?? baseCents,
+        discountCents,
+      );
+      const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
+      await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
+      await db.insert(payment).values({
+        id: crypto.randomUUID(),
+        customerId: row.customerId,
+        visitId,
+        amountCents: amount,
+        discountCents,
+        status: 'succeeded',
+        method: paymentMethod,
+      });
+      charge = { attempted: true, ok: true, amount_cents: amount };
+    } else if (!alreadyBilled && paymentMethod === 'card_on_file' && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
       const amount = finalChargeCents(baseCents, discountCents);
 
       if (amount <= 0) {
@@ -537,7 +572,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           baseCents,
           discountCents,
           totalCents: charge.amount_cents ?? 0,
-          outcome: (charge.amount_cents ?? 0) === 0 ? 'comped' : 'charged',
+          outcome:
+            paymentMethod === 'cash'
+              ? 'cash'
+              : paymentMethod === 'terminal'
+                ? 'terminal'
+                : (charge.amount_cents ?? 0) === 0
+                  ? 'comped'
+                  : 'charged',
         });
         photoAttachments.push({
           filename: 'LuckyShamrock-Receipt.pdf',

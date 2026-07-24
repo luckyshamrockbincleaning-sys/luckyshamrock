@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { handleDone as handler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, visit, notificationLog } from '../../db/schema.js';
+import { customer, visit, notificationLog, payment } from '../../db/schema.js';
 import { signOperatorCookie, OPERATOR_COOKIE_NAME } from '../../lib/operator.js';
 import { and, eq } from 'drizzle-orm';
 
@@ -249,5 +249,63 @@ describe('POST /api/operator/visit/:id/done', () => {
     await handler(await req(true, v1), res);
     expect(res.statusCode).toBe(409);
     expect(res.body.status).toBe('not_actionable');
+  });
+
+  it('records a cash payment without calling Stripe', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    expect(v!.paymentStatus).toBe('paid_cash');
+    const rows = await db.select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.method).toBe('cash');
+    expect(rows[0]!.status).toBe('succeeded');
+    expect(rows[0]!.amountCents).toBe(4500); // one-off, 1 bin
+  });
+
+  it('honours an operator amount override on cash', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', amount_cents: 4000 }), res);
+
+    expect(res.statusCode).toBe(200);
+    const rows = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows[0]!.amountCents).toBe(4000);
+  });
+
+  it('records a terminal (tap in Stripe app) payment', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'terminal' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.paymentStatus).toBe('paid_terminal');
+    const rows = await db.select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows[0]!.method).toBe('terminal');
+  });
+
+  it('rejects a negative amount override', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', amount_cents: -100 }), res);
+
+    expect(res.statusCode).toBe(400);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
   });
 });
