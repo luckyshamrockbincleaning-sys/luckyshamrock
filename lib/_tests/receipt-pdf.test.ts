@@ -37,4 +37,38 @@ describe('generateReceiptPdf', () => {
     });
     expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
+
+  it('renders a cash receipt', async () => {
+    const pdf = await generateReceiptPdf({
+      receiptNumber: 'LS-CASH01',
+      serviceDate: 'Fri, Jul 24, 2026',
+      paidDate: 'Fri, Jul 24, 2026',
+      customerName: 'Walk Up',
+      address: '9 Curb Lane, Fort Saskatchewan T8L 0A1',
+      planLabel: 'One-Time Clean',
+      binCount: 1,
+      baseCents: 4500,
+      discountCents: 0,
+      totalCents: 4500,
+      outcome: 'cash',
+    });
+    expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
+
+  it('renders a terminal (tap) receipt', async () => {
+    const pdf = await generateReceiptPdf({
+      receiptNumber: 'LS-TAP001',
+      serviceDate: 'Fri, Jul 24, 2026',
+      paidDate: 'Fri, Jul 24, 2026',
+      customerName: 'Walk Up',
+      address: '9 Curb Lane, Fort Saskatchewan T8L 0A1',
+      planLabel: 'One-Time Clean',
+      binCount: 2,
+      baseCents: 5700,
+      discountCents: 0,
+      totalCents: 5700,
+      outcome: 'terminal',
+    });
+    expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
 });

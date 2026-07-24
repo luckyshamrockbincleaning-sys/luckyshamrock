@@ -21,8 +21,8 @@ export interface ReceiptInput {
   baseCents: number;
   discountCents: number;
   totalCents: number;
-  /** 'charged' shows amount paid by card; 'comped' shows $0 with a note. */
-  outcome: 'charged' | 'comped';
+  /** How this clean was settled — drives the line under the total. */
+  outcome: 'charged' | 'comped' | 'cash' | 'terminal';
 }
 
 const GREEN = rgb(0.114, 0.478, 0.239); // #1d7a3d
@@ -87,10 +87,15 @@ export async function generateReceiptPdf(r: ReceiptInput): Promise<Buffer> {
   const tw = bold.widthOfTextAtSize(total, 13);
   page.drawText(total, { x: right - tw, y: y - 1, size: 13, font: bold, color: GREEN });
   y -= 20;
-  page.drawText(
-    r.outcome === 'comped' ? 'This clean was on us — no charge.' : 'Paid by card on file.',
-    { x: left, y, size: 9, font: helv, color: MUTED },
-  );
+  const paidByLine =
+    r.outcome === 'comped'
+      ? 'This clean was on us — no charge.'
+      : r.outcome === 'cash'
+        ? 'Paid in cash — thank you!'
+        : r.outcome === 'terminal'
+          ? 'Paid by card in person.'
+          : 'Paid by card on file.';
+  page.drawText(paidByLine, { x: left, y, size: 9, font: helv, color: MUTED });
 
   // Footer
   page.drawLine({ start: { x: left, y: 64 }, end: { x: right, y: 64 }, thickness: 1, color: HAIR });
