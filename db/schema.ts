@@ -65,7 +65,13 @@ export const paymentStatusEnum = pgEnum('payment_status', [
   'comped', // intentionally not charged (full discount / freebie)
   'failed', // charge attempted and declined — needs retry / another method
   'refunded', // charge was refunded (e.g. from the Stripe dashboard)
+  'paid_cash', // collected in cash at the door
+  'paid_terminal', // collected via tap in the Stripe app; reconciled in Stripe
+  'awaiting_payment', // QR issued, waiting for checkout.session.completed
 ]);
+
+// How the money arrived. Lets revenue be split by channel later.
+export const paymentMethodEnum = pgEnum('payment_method', ['card', 'cash', 'terminal', 'qr']);
 
 // Lifecycle of a single payment attempt (Phase 6 — Stripe).
 export const paymentRecordStatusEnum = pgEnum('payment_record_status', [
@@ -237,6 +243,7 @@ export const payment = pgTable(
     discountCents: integer('discount_cents').notNull().default(0),
     currency: varchar('currency', { length: 3 }).notNull().default('cad'),
     status: paymentRecordStatusEnum('status').notNull().default('pending'),
+    method: paymentMethodEnum('method').notNull().default('card'),
     failureReason: text('failure_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
