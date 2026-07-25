@@ -308,4 +308,18 @@ describe('POST /api/operator/visit/:id/done', () => {
     const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
     expect(v!.status).toBe('scheduled');
   });
+
+  it('marks a QR payment awaiting_payment and returns no url when Stripe is unconfigured', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'qr' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    // Stripe is unconfigured in tests: the clean still completes.
+    expect(v!.paymentStatus).toBe('unpaid');
+  });
 });

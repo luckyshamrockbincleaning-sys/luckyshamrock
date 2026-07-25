@@ -28,11 +28,12 @@ import { LEPRECHAUN_SPRITES } from './leprechaun-sprites.js';
 import { generateReceiptPdf } from './receipt-pdf.js';
 import { signRatingToken } from './rating-token.js';
 import { isStripeConfigured } from './stripe.js';
-import { chargeOffSession } from './billing.js';
+import { chargeOffSession, createDoorstepCheckoutSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
 import { formatFriendlyDate } from './dates.js';
 import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
+import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIONABLE_VISIT_STATUSES: Array<'scheduled' | 'heading_there'> = ['scheduled', 'heading_there'];
@@ -393,6 +394,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       attempted: false,
       ok: false,
     };
+    let paymentUrl: string | null = null;
+    let paymentQrSvg: string | null = null;
     const alreadyBilled = row.paymentStatus === 'charged' || row.paymentStatus === 'comped';
     // Cadence + bin count are needed by both billing and the PDF receipt.
     let cadence: Cadence | null = null;
@@ -406,7 +409,41 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // Doorstep settlement: the operator collected in person. No Stripe call —
     // the money is already in hand (cash) or captured in the Stripe app
     // (terminal, reconciled there by amount/time).
-    if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
+    // QR: Stripe hosts the payment page; we only hand the customer a link.
+    // The visit completes now and the money confirms asynchronously via the
+    // checkout.session.completed webhook.
+    if (!alreadyBilled && paymentMethod === 'qr') {
+      const amount = finalChargeCents(
+        paymentParsed.data.amount_cents ?? baseCents,
+        discountCents,
+      );
+      const session = await createDoorstepCheckoutSession({
+        visitId,
+        amountCents: amount,
+        description: `Garbage bin cleaning — ${binCount} bin${binCount > 1 ? 's' : ''}`,
+      });
+      if (session) {
+        paymentUrl = session.url;
+        // Rendered server-side so /ops needs no QR library (and no extra CDN
+        // script). ~2 KB of SVG, injected straight into the page.
+        try {
+          paymentQrSvg = await QRCode.toString(session.url, { type: 'svg', margin: 1, width: 240 });
+        } catch (err) {
+          console.error('[operator/visit/done] qr render failed (link still returned)', err);
+        }
+        await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+        await db.insert(payment).values({
+          id: crypto.randomUUID(),
+          customerId: row.customerId,
+          visitId,
+          amountCents: amount,
+          discountCents,
+          status: 'pending',
+          method: 'qr',
+        });
+        charge = { attempted: true, ok: true, amount_cents: amount };
+      }
+    } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
       const amount = finalChargeCents(
         paymentParsed.data.amount_cents ?? baseCents,
         discountCents,
@@ -548,8 +585,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
     // PDF receipt whenever money changed hands (or was explicitly comped) on
-    // THIS tap. Regular attachment (paperclip), not inline. Best-effort.
-    if (charge.attempted && charge.ok) {
+    // THIS tap. Regular attachment (paperclip), not inline. Best-effort. QR is
+    // excluded here: the customer hasn't actually paid yet at this point —
+    // confirmation arrives later via the checkout.session.completed webhook.
+    if (charge.attempted && charge.ok && paymentMethod !== 'qr') {
       try {
         const planLabel =
           cadence === null
@@ -624,6 +663,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       next_visit_date: nextVisitDate,
       skipped: result.skipped ?? false,
       charge,
+      payment_url: paymentUrl,
+      payment_qr_svg: paymentQrSvg,
     });
   } catch (err) {
     console.error('[operator/visit/done] failed', err);
