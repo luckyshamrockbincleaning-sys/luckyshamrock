@@ -517,13 +517,22 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // Idempotent on (visitId, 'done'). The email is the customer's receipt —
     // it carries the charge outcome and shows the next date in the same
     // friendly format as the booking confirmation.
+    // QR is special: `charge.ok` here only means "a Checkout Session was
+    // created," not "the customer paid." No money has moved yet — that's
+    // confirmed later by the checkout.session.completed webhook (Task 5) — so
+    // the email must not claim a charge. 'none' renders no payment sentence,
+    // which is the truthful state at Done time. This does NOT touch the
+    // `charge` object itself (still {attempted:true, ok:true, ...} for the
+    // /ops UI and the HTTP response) — only the email's view of it.
     const emailCharge: NonNullable<Parameters<typeof doneTemplate>[0]['charge']> = !charge.attempted
       ? { kind: 'none' }
-      : !charge.ok
-        ? { kind: 'failed' }
-        : charge.amount_cents === 0
-          ? { kind: 'comped' }
-          : { kind: 'charged', amountCents: charge.amount_cents };
+      : paymentMethod === 'qr'
+        ? { kind: 'none' }
+        : !charge.ok
+          ? { kind: 'failed' }
+          : charge.amount_cents === 0
+            ? { kind: 'comped' }
+            : { kind: 'charged', amountCents: charge.amount_cents };
     // Per-visit wash animation: the whole story lives in ONE GIF (before
     // hold → Lucky frantically foams the photo → after reveal), with subtle
     // corner timestamps as proof of service. When it generates, the email
