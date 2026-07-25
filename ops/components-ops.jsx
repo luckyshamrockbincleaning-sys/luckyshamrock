@@ -265,8 +265,12 @@ function StopCard({ stop, onAction, busy, showDate }) {
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
     if (beforeState.photo) payload.before_photo = beforeState.photo;
     const result = await onAction('done', stop, payload);
+    // onAction swallows errors and returns undefined on failure (and on a 401),
+    // so a falsy result means the Done did NOT go through — keep the persisted
+    // photos so the operator can retry without re-shooting them in the field.
+    if (!result) return;
     clearPhotos(stop.id);
-    if (result && result.payment_url) {
+    if (result.payment_url) {
       setQrUrl(result.payment_url);
       setQrSvg(result.payment_qr_svg || '');
     }
