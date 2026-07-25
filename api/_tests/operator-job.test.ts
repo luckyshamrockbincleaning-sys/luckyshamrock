@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { handleNewJob as handler, handleDone as doneHandler, handleNotify as notifyHandler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
@@ -84,6 +84,59 @@ describe('POST /api/operator/job (walk-up)', () => {
     expect(customers).toHaveLength(1);
     const visits = await getDb().select().from(visit).where(eq(visit.customerId, customers[0]!.id));
     expect(visits).toHaveLength(2);
+  });
+
+  it('rolls back the customer insert when the visit insert fails (atomicity)', async () => {
+    const db = getDb();
+
+    // Pre-seed a "victim" customer + visit so we can force a deterministic
+    // DB-level failure on the *visit* insert without violating newJobSchema's
+    // own validation (bin_count etc. all stay valid — only the visit's
+    // primary-key uniqueness constraint trips).
+    const victimCustomerId = crypto.randomUUID();
+    const clashingVisitId = crypto.randomUUID();
+    await db.insert(customer).values({
+      id: victimCustomerId,
+      email: 'victim@example.com',
+      name: 'Victim',
+      street: '1 Victim Ave',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L0A1',
+      pickupDay: 'wednesday',
+    });
+    await db.insert(visit).values({
+      id: clashingVisitId,
+      customerId: victimCustomerId,
+      subscriptionId: null,
+      binCount: 1,
+      scheduledFor: new Date(),
+      status: 'scheduled',
+    });
+
+    // handleNewJob's first crypto.randomUUID() call mints the new visit's id.
+    // Force just that call to collide with the pre-seeded visit's id so the
+    // visit insert hits the primary-key unique constraint — a deterministic
+    // failure that only trips AFTER the (new) customer insert has run inside
+    // the same transaction.
+    const uuidSpy = vi.spyOn(crypto, 'randomUUID').mockReturnValueOnce(clashingVisitId);
+
+    try {
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, email: 'atomic@example.com' }), res);
+
+      expect(res.statusCode).toBe(500);
+      expect(res.body).toEqual({
+        status: 'error',
+        message: 'Something went wrong on our end. Please try again.',
+      });
+
+      // The customer insert must have rolled back along with the failed visit
+      // insert — no orphan customer row with zero visits left behind.
+      const newCustomers = await db.select().from(customer).where(eq(customer.email, 'atomic@example.com'));
+      expect(newCustomers).toHaveLength(0);
+    } finally {
+      uuidSpy.mockRestore();
+    }
   });
 
   it('rejects a missing street', async () => {

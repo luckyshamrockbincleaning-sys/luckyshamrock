@@ -263,27 +263,34 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     // send path skips these (see notifications).
     const email = data.email ?? `walkup+${visitId.slice(0, 8)}@luckyshamrock.ca`;
 
+    // Read outside the transaction (mirrors api/book.ts).
     const [existing] = await db.select().from(customer).where(eq(customer.email, email));
     const customerId = existing?.id ?? crypto.randomUUID();
-    if (!existing) {
-      await db.insert(customer).values({
-        id: customerId,
-        email,
-        name: data.name ?? 'Walk-up customer',
-        street: data.street,
-        city: data.city ?? 'Fort Saskatchewan',
-        postalCode: normalizePostalCode(data.postal_code),
-        pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
-      });
-    }
+    const isNewCustomer = !existing;
 
-    await db.insert(visit).values({
-      id: visitId,
-      customerId,
-      subscriptionId: null,
-      binCount: data.bin_count,
-      scheduledFor: new Date(`${operatorTodayISO()}T12:00:00Z`),
-      status: 'scheduled',
+    // Customer insert (if new) + visit insert in one transaction — a mid-flight
+    // failure must not leave an orphan customer with zero visits behind.
+    await db.transaction(async (tx) => {
+      if (isNewCustomer) {
+        await tx.insert(customer).values({
+          id: customerId,
+          email,
+          name: data.name ?? 'Walk-up customer',
+          street: data.street,
+          city: data.city ?? 'Fort Saskatchewan',
+          postalCode: normalizePostalCode(data.postal_code),
+          pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
+        });
+      }
+
+      await tx.insert(visit).values({
+        id: visitId,
+        customerId,
+        subscriptionId: null,
+        binCount: data.bin_count,
+        scheduledFor: new Date(`${operatorTodayISO()}T12:00:00Z`),
+        status: 'scheduled',
+      });
     });
 
     res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId });
