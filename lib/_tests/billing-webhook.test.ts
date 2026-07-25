@@ -200,4 +200,72 @@ describe('applyStripeEvent', () => {
     });
     expect(tag).toBe('checkout.session.completed:ignored_unpaid');
   });
+
+  it('checkout.session.completed is safe when redelivered by Stripe (idempotent)', async () => {
+    const cid = await makeCustomer('cus_qr3');
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_qr_3');
+    const db = getDb();
+    await db.update(payment).set({ status: 'pending', method: 'qr' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+
+    const event = {
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_3', payment_status: 'paid', metadata: { visit_id: visitId }, payment_intent: 'pi_qr_3' } },
+    };
+
+    const firstTag = await applyStripeEvent(event);
+    expect(firstTag).toBe('checkout.session.completed:applied');
+
+    // Stripe redelivers the same event — this must not throw (e.g. from a
+    // duplicate stripePaymentIntentId write) and must not corrupt state.
+    const secondTag = await applyStripeEvent(event);
+    // The row is no longer 'pending' after the first delivery, so the scoped
+    // WHERE finds nothing on redelivery — a safe no-op since state is already
+    // final.
+    expect(secondTag).toBe('checkout.session.completed:no_row');
+
+    const rows = await db.select().from(payment).where(eq(payment.visitId, visitId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('succeeded');
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(v!.paymentStatus).toBe('charged');
+  });
+
+  it('checkout.session.completed only settles the pending QR row, leaving an unrelated failed card payment untouched', async () => {
+    const cid = await makeCustomer('cus_qr4');
+    const { visitId, paymentId: cardPaymentId } = await makeVisitWithPayment(cid, 'pi_card_failed');
+    const db = getDb();
+    // An unrelated failed card-method payment row on the same visit (e.g. a
+    // previous in-person attempt that got declined).
+    await db
+      .update(payment)
+      .set({ status: 'failed', method: 'card', failureReason: 'Your card was declined.' })
+      .where(eq(payment.id, cardPaymentId));
+
+    // The pending QR row this event should actually settle.
+    const qrPaymentId = crypto.randomUUID();
+    await db.insert(payment).values({
+      id: qrPaymentId,
+      customerId: cid,
+      visitId,
+      stripePaymentIntentId: null,
+      amountCents: 3500,
+      status: 'pending',
+      method: 'qr',
+    });
+    await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+
+    const tag = await applyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_4', payment_status: 'paid', metadata: { visit_id: visitId }, payment_intent: 'pi_qr_4' } },
+    });
+    expect(tag).toBe('checkout.session.completed:applied');
+
+    const [cardRow] = await db.select().from(payment).where(eq(payment.id, cardPaymentId));
+    const [qrRow] = await db.select().from(payment).where(eq(payment.id, qrPaymentId));
+    expect(cardRow!.status).toBe('failed');
+    expect(qrRow!.status).toBe('succeeded');
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(v!.paymentStatus).toBe('charged');
+  });
 });

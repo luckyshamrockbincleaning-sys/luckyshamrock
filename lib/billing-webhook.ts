@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
 import { sendAndLog } from './notifications.js';
@@ -135,6 +135,12 @@ export async function applyStripeEvent(event: {
       if (obj.payment_status !== 'paid') return 'checkout.session.completed:ignored_unpaid';
 
       const piId = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+      // Scope to the visit's pending QR row specifically — payment.visitId is
+      // not unique (a retried charge inserts a second row per visit; see
+      // handleRetry in operator-handlers.ts). An unscoped update here would
+      // flip every matching row to succeeded and could collide on the
+      // stripePaymentIntentId unique constraint, throwing and making Stripe
+      // retry the event forever.
       const [p] = await db
         .update(payment)
         .set({
@@ -142,7 +148,9 @@ export async function applyStripeEvent(event: {
           ...(piId ? { stripePaymentIntentId: piId } : {}),
           updatedAt: new Date(),
         })
-        .where(eq(payment.visitId, visitId))
+        .where(
+          and(eq(payment.visitId, visitId), eq(payment.status, 'pending'), eq(payment.method, 'qr'))
+        )
         .returning();
       if (!p) return 'checkout.session.completed:no_row';
 
