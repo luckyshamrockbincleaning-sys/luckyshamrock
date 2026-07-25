@@ -220,6 +220,76 @@ function PhotoStep({ n, title, hint, state, onChange, busy }) {
   );
 }
 
+// Walk-up job: someone flags the truck down. Deliberately minimal — street,
+// bins, and an optional email are all that's needed to start cleaning.
+function NewJobCard({ onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function submit() {
+    setErr('');
+    if (!form.street.trim() || !form.postal_code.trim()) {
+      setErr('Street and postal code are required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const body = {
+        street: form.street.trim(),
+        postal_code: form.postal_code.trim(),
+        bin_count: Number(form.bin_count) || 1,
+      };
+      if (form.email.trim()) body.email = form.email.trim();
+      if (form.name.trim()) body.name = form.name.trim();
+      const r = await fetch('/api/operator/job', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('could not create job');
+      setForm({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+      setOpen(false);
+      onCreated();
+    } catch (e) {
+      setErr('Could not create the job — try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="btn btn-primary ops-btn" style={{ width: '100%', marginBottom: 12 }} onClick={() => setOpen(true)}>
+        + New job here
+      </button>
+    );
+  }
+
+  const field = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  return (
+    <div className="ops-card" style={{ marginBottom: 12 }}>
+      <h2 style={{ marginTop: 0, fontSize: 17 }}>New job at this address</h2>
+      <Flash kind="err" text={err} />
+      <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
+      <input style={field} placeholder="Postal code *" value={form.postal_code} onChange={(e) => setForm({ ...form, postal_code: e.target.value })} />
+      <select style={field} value={form.bin_count} onChange={(e) => setForm({ ...form, bin_count: e.target.value })}>
+        <option value={1}>1 bin</option>
+        <option value={2}>2 bins</option>
+        <option value={3}>3 bins</option>
+      </select>
+      <input style={field} placeholder="Email (optional — for receipt)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      <input style={field} placeholder="Name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-go ops-btn" disabled={busy} onClick={submit}>{busy ? 'Creating…' : 'Start job'}</button>
+        <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
@@ -645,6 +715,8 @@ function OpsApp() {
       </div>
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
+
+      {view === 'today' && <NewJobCard onCreated={load} />}
 
       {data.loading ? (
         <div className="ops-card"><p>Loading…</p></div>
