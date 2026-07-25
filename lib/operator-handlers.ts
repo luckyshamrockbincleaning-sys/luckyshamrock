@@ -21,6 +21,7 @@ import {
   operatorTodayISO,
   toOperatorVisit,
 } from './operator.js';
+import { normalizePostalCode } from './postal.js';
 import { sendAndLog } from './notifications.js';
 import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID, DONE_WASH_GIF_CID } from './email/templates.js';
 import { generateWashGif } from './wash-gif.js';
@@ -59,6 +60,19 @@ const donePaymentSchema = z.object({
   // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
   amount_cents: z.number().int().min(0).max(100_000).optional(),
 });
+const newJobSchema = z.object({
+  street: z.string().trim().min(1).max(200),
+  postal_code: z.string().trim().min(1).max(10),
+  bin_count: z.number().int().min(1).max(3).default(1),
+  email: z.string().trim().toLowerCase().email().optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  city: z.string().trim().min(1).max(120).optional(),
+});
+
+/** Walk-up customers who gave no email get a placeholder — never mail those. */
+export function isPlaceholderEmail(email: string): boolean {
+  return /^walkup\+[0-9a-f]{8}@luckyshamrock\.ca$/i.test(email);
+}
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -211,6 +225,70 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
     res.status(200).json({ status: 'ok', visits: rows.map(toOperatorVisit) });
   } catch (err) {
     console.error('[operator/upcoming] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/job — create a job for a walk-up customer
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * The neighbour who flags the truck down. Deliberately skips the service-area
+ * gate: that guard exists to stop out-of-area self-serve bookings, and the
+ * operator is physically standing at the bin. Creates a real customer so the
+ * receipt, wash GIF, and rating funnel all work and the customer can be
+ * upsold a plan later.
+ */
+export async function handleNewJob(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = newJobSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data = parsed.data;
+
+  try {
+    const db = getDb();
+    const visitId = crypto.randomUUID();
+    // customer.email is NOT NULL + UNIQUE. A walk-up who won't share an email
+    // still needs a valid row, so mint a routable-looking placeholder; the
+    // send path skips these (see notifications).
+    const email = data.email ?? `walkup+${visitId.slice(0, 8)}@luckyshamrock.ca`;
+
+    const [existing] = await db.select().from(customer).where(eq(customer.email, email));
+    const customerId = existing?.id ?? crypto.randomUUID();
+    if (!existing) {
+      await db.insert(customer).values({
+        id: customerId,
+        email,
+        name: data.name ?? 'Walk-up customer',
+        street: data.street,
+        city: data.city ?? 'Fort Saskatchewan',
+        postalCode: normalizePostalCode(data.postal_code),
+        pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
+      });
+    }
+
+    await db.insert(visit).values({
+      id: visitId,
+      customerId,
+      subscriptionId: null,
+      binCount: data.bin_count,
+      scheduledFor: new Date(`${operatorTodayISO()}T12:00:00Z`),
+      status: 'scheduled',
+    });
+
+    res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId });
+  } catch (err) {
+    console.error('[operator/job] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
@@ -656,7 +734,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       ratingBaseUrl,
       charge: emailCharge,
     });
-    const result = await sendAndLog({
+    const result = isPlaceholderEmail(row.email)
+      ? { skipped: true as const }
+      : await sendAndLog({
       kind: 'done',
       to: row.email,
       subject: tpl.subject,
