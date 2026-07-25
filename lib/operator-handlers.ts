@@ -612,15 +612,22 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // which is the truthful state at Done time. This does NOT touch the
     // `charge` object itself (still {attempted:true, ok:true, ...} for the
     // /ops UI and the HTTP response) — only the email's view of it.
+    // cash/terminal each get their own truthful line (mirrors receipt-pdf.ts)
+    // instead of falling through to 'charged', which used to falsely tell a
+    // walk-up who paid cash that "your card on file was charged."
     const emailCharge: NonNullable<Parameters<typeof doneTemplate>[0]['charge']> = !charge.attempted
       ? { kind: 'none' }
       : paymentMethod === 'qr'
         ? { kind: 'none' }
-        : !charge.ok
-          ? { kind: 'failed' }
-          : charge.amount_cents === 0
-            ? { kind: 'comped' }
-            : { kind: 'charged', amountCents: charge.amount_cents };
+        : paymentMethod === 'cash'
+          ? { kind: 'cash' }
+          : paymentMethod === 'terminal'
+            ? { kind: 'terminal' }
+            : !charge.ok
+              ? { kind: 'failed' }
+              : charge.amount_cents === 0
+                ? { kind: 'comped' }
+                : { kind: 'charged', amountCents: charge.amount_cents };
     // Per-visit wash animation: the whole story lives in ONE GIF (before
     // hold → Lucky frantically foams the photo → after reveal), with subtle
     // corner timestamps as proof of service. When it generates, the email

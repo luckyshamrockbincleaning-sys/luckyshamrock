@@ -125,13 +125,18 @@ export function doneTemplate(p: {
   /**
    * Payment outcome for this clean — the email doubles as the customer's
    * receipt, since charging happens silently on the operator's Done tap.
-   * - charged: card billed `amountCents` (include the amount).
-   * - comped:  fully discounted — explicitly say no charge.
-   * - failed:  card declined — tell the customer so the /manage banner isn't
-   *            their first hint.
-   * - none:    no billing attempted (no card on file / Stripe unconfigured).
+   * - charged:  card billed `amountCents` (include the amount).
+   * - cash:     collected in cash at the door — no card was touched.
+   * - terminal: collected via tap in the Stripe app (in person) — the
+   *             customer's card on file was NOT charged.
+   * - comped:   fully discounted — explicitly say no charge.
+   * - failed:   card declined — tell the customer so the /manage banner isn't
+   *             their first hint.
+   * - none:     no billing attempted (no card on file / Stripe unconfigured),
+   *             or a QR was issued but not yet paid (confirmation lands via
+   *             a separate receipt email once the customer pays).
    */
-  charge?: { kind: 'charged' | 'comped' | 'failed' | 'none'; amountCents?: number };
+  charge?: { kind: 'charged' | 'cash' | 'terminal' | 'comped' | 'failed' | 'none'; amountCents?: number };
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
@@ -171,6 +176,10 @@ export function doneTemplate(p: {
   let chargeLine = '';
   if (p.charge?.kind === 'charged' && typeof p.charge.amountCents === 'number') {
     chargeLine = `Your card on file was charged ${formatCad(p.charge.amountCents)}.`;
+  } else if (p.charge?.kind === 'cash') {
+    chargeLine = `Paid in cash — thank you!`;
+  } else if (p.charge?.kind === 'terminal') {
+    chargeLine = `Paid by card in person.`;
   } else if (p.charge?.kind === 'comped') {
     chargeLine = `This clean was on us — no charge.`;
   } else if (p.charge?.kind === 'failed') {
