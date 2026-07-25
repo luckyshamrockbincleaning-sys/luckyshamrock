@@ -306,8 +306,6 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const [discount, setDiscount] = useState('');
   const [payMethod, setPayMethod] = useState('card_on_file');
   const [amountOverride, setAmountOverride] = useState('');
-  const [qrUrl, setQrUrl] = useState('');
-  const [qrSvg, setQrSvg] = useState('');
   const [photoState, setPhotoState] = useState(() => {
     const saved = savedPhotos(stop.id);
     return saved?.clean
@@ -347,10 +345,9 @@ function StopCard({ stop, onAction, busy, showDate }) {
     // photos so the operator can retry without re-shooting them in the field.
     if (!result) return;
     clearPhotos(stop.id);
-    if (result.payment_url) {
-      setQrUrl(result.payment_url);
-      setQrSvg(result.payment_qr_svg || '');
-    }
+    // Any QR result is surfaced by OpsApp (lifted state — see QrPanel), not
+    // here: this card is about to unmount when the list reloads to drop the
+    // now-done visit, so state kept on THIS component would vanish with it.
   }
 
   async function onPhotoChange(e) {
@@ -526,18 +523,31 @@ function StopCard({ stop, onAction, busy, showDate }) {
         )}
         <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => onAction('note', stop)}>Note</button>
       </div>
+    </div>
+  );
+}
 
-      {qrUrl && (
-        <div style={{ marginTop: 12, textAlign: 'center', padding: 12, border: '1px solid #cde3cd', borderRadius: 10, background: '#f7fbf7' }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Have them scan to pay</div>
-          {qrSvg
-            ? <div style={{ display: 'flex', justifyContent: 'center' }} dangerouslySetInnerHTML={{ __html: qrSvg }} />
-            : <div style={{ fontSize: 12 }}>QR unavailable — use the link below.</div>}
-          <div style={{ marginTop: 8, fontSize: 12 }}>
-            <a href={qrUrl} target="_blank" rel="noopener" style={{ color: '#1d7a3d' }}>or open the payment link</a>
-          </div>
+// QR result lives in OpsApp state (not the StopCard that created it) so it
+// survives the list reload that happens right after Done — see B1: the
+// just-completed visit drops out of the actionable list and its StopCard
+// unmounts, which used to take the QR with it before the customer ever saw it.
+function QrPanel({ qr, onDismiss }) {
+  if (!qr) return null;
+  return (
+    <div className="ops-card" style={{ textAlign: 'center', border: '1px solid #cde3cd', background: '#f7fbf7' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', textAlign: 'left' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Have {qr.customerName} scan to pay</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>{qr.address}</div>
         </div>
-      )}
+        <button className="btn-ghost" style={{ padding: 0 }} onClick={onDismiss} aria-label="Dismiss">×</button>
+      </div>
+      {qr.svg
+        ? <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }} dangerouslySetInnerHTML={{ __html: qr.svg }} />
+        : <div style={{ fontSize: 12, marginTop: 8 }}>QR unavailable — use the link below.</div>}
+      <div style={{ marginTop: 8, fontSize: 12 }}>
+        <a href={qr.url} target="_blank" rel="noopener" style={{ color: '#1d7a3d' }}>or open the payment link</a>
+      </div>
     </div>
   );
 }
@@ -574,6 +584,9 @@ function OpsApp() {
   const [data, setData] = useState({ loading: true, stops: [], date: null });
   const [flash, setFlash] = useState({ kind: '', text: '' });
   const [busy, setBusy] = useState(false);
+  // QR from the most recent Done tap — lifted up here (not in StopCard) so it
+  // survives the list reload that follows every Done. See QrPanel.
+  const [qr, setQr] = useState(null);
 
   const load = useCallback(async (which) => {
     setData((d) => ({ ...d, loading: true }));
@@ -660,6 +673,18 @@ function OpsApp() {
         else if (c?.attempted && !c.ok) chargeNote = ' ⚠ Card declined — collect another way.';
         const next = j.next_visit_date ? `next clean ${formatDate(j.next_visit_date)}.` : 'no more scheduled cleans.';
         setFlash({ kind: c?.attempted && !c.ok ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
+        // Lifted out of StopCard: the visit is about to drop out of the
+        // actionable list on reload below, which would unmount the card (and
+        // the QR with it) before the operator could show the customer.
+        if (j.payment_url) {
+          setQr({
+            visitId: stop.id,
+            url: j.payment_url,
+            svg: j.payment_qr_svg || '',
+            customerName: stop.customer_name,
+            address: `${stop.street}, ${stop.city} ${stop.postal_code}`,
+          });
+        }
       } else if (action === 'skip') {
         setFlash({ kind: 'ok', text: `Skipped ${stop.customer_name}.` });
       } else if (action === 'note') {
@@ -724,6 +749,8 @@ function OpsApp() {
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
 
       {view === 'today' && <NewJobCard onCreated={load} />}
+
+      <QrPanel qr={qr} onDismiss={() => setQr(null)} />
 
       {data.loading ? (
         <div className="ops-card"><p>Loading…</p></div>
