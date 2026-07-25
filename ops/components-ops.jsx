@@ -227,6 +227,10 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const heading = stop.status === 'heading_there';
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
+  const [payMethod, setPayMethod] = useState('card_on_file');
+  const [amountOverride, setAmountOverride] = useState('');
+  const [qrUrl, setQrUrl] = useState('');
+  const [qrSvg, setQrSvg] = useState('');
   const [photoState, setPhotoState] = useState(() => {
     const saved = savedPhotos(stop.id);
     return saved?.clean
@@ -241,7 +245,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
   });
   const pay = PAY_BADGE[stop.payment_status];
 
-  function doneWithDiscount() {
+  async function doneWithDiscount() {
     if (!photoState.photo) {
       setPhotoState((s) => ({ ...s, phase: 'error', message: 'Take a clean-bin photo before tapping Done.' }));
       return;
@@ -256,11 +260,16 @@ function StopCard({ stop, onAction, busy, showDate }) {
     }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-    const payload = { discount_cents, clean_photo: photoState.photo };
-    // Optional before shot → customer gets the wash animation in the email.
+    const payload = { discount_cents, clean_photo: photoState.photo, payment_method: payMethod };
+    const amt = parseFloat(amountOverride);
+    if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
     if (beforeState.photo) payload.before_photo = beforeState.photo;
     clearPhotos(stop.id);
-    onAction('done', stop, payload);
+    const result = await onAction('done', stop, payload);
+    if (result && result.payment_url) {
+      setQrUrl(result.payment_url);
+      setQrSvg(result.payment_qr_svg || '');
+    }
   }
 
   async function onPhotoChange(e) {
@@ -346,6 +355,55 @@ function StopCard({ stop, onAction, busy, showDate }) {
       )}
 
       {!isDone && !isCancelled && (
+        <div className="ops-pay" style={{ marginTop: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+            How are they paying?
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {[
+              ['card_on_file', '💳 Card on file'],
+              ['qr', '📱 QR code'],
+              ['terminal', '🔖 Tap in Stripe'],
+              ['cash', '💵 Cash'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                disabled={busy}
+                onClick={() => setPayMethod(value)}
+                style={{
+                  padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                  border: payMethod === value ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
+                  background: payMethod === value ? 'var(--green-soft, #eef6ef)' : '#fff',
+                  fontWeight: payMethod === value ? 600 : 400,
+                }}
+              >{label}</button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Amount&nbsp;$</label>
+            <input
+              type="number" min="0" step="1" inputMode="decimal" placeholder="auto"
+              value={amountOverride} onChange={(e) => setAmountOverride(e.target.value)}
+              style={{ width: 90, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15 }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>blank = standard price</span>
+          </div>
+          {payMethod === 'terminal' && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>
+              <a
+                href="https://dashboard.stripe.com/payments"
+                target="_blank"
+                rel="noopener"
+                style={{ color: '#1d7a3d', fontWeight: 600 }}
+              >Open Stripe app to tap →</a>
+              <div>Collect there, then tap Done here to record it.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isDone && !isCancelled && (
         <div className="ops-discount" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
           <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Discount&nbsp;$</label>
           <input
@@ -387,6 +445,18 @@ function StopCard({ stop, onAction, busy, showDate }) {
         )}
         <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => onAction('note', stop)}>Note</button>
       </div>
+
+      {qrUrl && (
+        <div style={{ marginTop: 12, textAlign: 'center', padding: 12, border: '1px solid #cde3cd', borderRadius: 10, background: '#f7fbf7' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Have them scan to pay</div>
+          {qrSvg
+            ? <div style={{ display: 'flex', justifyContent: 'center' }} dangerouslySetInnerHTML={{ __html: qrSvg }} />
+            : <div style={{ fontSize: 12 }}>QR unavailable — use the link below.</div>}
+          <div style={{ marginTop: 8, fontSize: 12 }}>
+            <a href={qrUrl} target="_blank" rel="noopener" style={{ color: '#1d7a3d' }}>or open the payment link</a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -472,6 +542,12 @@ function OpsApp() {
       if (action === 'done' && opts.clean_photo) {
         body.clean_photo = opts.clean_photo;
       }
+      if (action === 'done' && opts.payment_method) {
+        body.payment_method = opts.payment_method;
+      }
+      if (action === 'done' && opts.amount_cents) {
+        body.amount_cents = opts.amount_cents;
+      }
 
       const r = await fetch('/api/operator/act', {
         method: 'POST',
@@ -511,6 +587,7 @@ function OpsApp() {
         });
       }
       await load(view);
+      return j;
     } catch (e) {
       setFlash({ kind: 'err', text: e.message });
     } finally {
