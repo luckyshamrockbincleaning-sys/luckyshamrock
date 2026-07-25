@@ -264,8 +264,8 @@ function StopCard({ stop, onAction, busy, showDate }) {
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
     if (beforeState.photo) payload.before_photo = beforeState.photo;
-    clearPhotos(stop.id);
     const result = await onAction('done', stop, payload);
+    clearPhotos(stop.id);
     if (result && result.payment_url) {
       setQrUrl(result.payment_url);
       setQrSvg(result.payment_qr_svg || '');
@@ -383,7 +383,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Amount&nbsp;$</label>
             <input
-              type="number" min="0" step="1" inputMode="decimal" placeholder="auto"
+              type="number" min="0" max="1000" step="1" inputMode="decimal" placeholder="auto"
               value={amountOverride} onChange={(e) => setAmountOverride(e.target.value)}
               style={{ width: 90, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15 }}
             />
