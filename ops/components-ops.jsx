@@ -539,6 +539,12 @@ function OpsApp() {
       if (action === 'done' && opts.discount_cents > 0) {
         body.discount_cents = opts.discount_cents;
       }
+      // These photo fields must be forwarded explicitly. The server combines
+      // before + after photos to generate the leprechaun wash animation GIF in
+      // the done email. Omitting either one silently disables the animation.
+      if (action === 'done' && opts.before_photo) {
+        body.before_photo = opts.before_photo;
+      }
       if (action === 'done' && opts.clean_photo) {
         body.clean_photo = opts.clean_photo;
       }
