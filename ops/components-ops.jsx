@@ -229,6 +229,7 @@ function NewJobCard({ onCreated }) {
   const [err, setErr] = useState('');
 
   async function submit() {
+    if (busy) return;
     setErr('');
     if (!form.street.trim() || !form.postal_code.trim()) {
       setErr('Street and postal code are required.');
@@ -249,12 +250,18 @@ function NewJobCard({ onCreated }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!r.ok) throw new Error('could not create job');
+      if (!r.ok) {
+        if (r.status === 401) {
+          throw new Error('Session expired — sign in again to create jobs.');
+        }
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || j.status || `${r.status}`);
+      }
       setForm({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
       setOpen(false);
       onCreated();
     } catch (e) {
-      setErr('Could not create the job — try again.');
+      setErr(e.message);
     } finally {
       setBusy(false);
     }
