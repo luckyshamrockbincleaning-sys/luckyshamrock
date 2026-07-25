@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { handleNewJob as handler, handleDone as doneHandler } from '../../lib/operator-handlers.js';
+import { handleNewJob as handler, handleDone as doneHandler, handleNotify as notifyHandler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
 import { customer, visit, notificationLog } from '../../db/schema.js';
@@ -92,7 +92,7 @@ describe('POST /api/operator/job (walk-up)', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('sends no customer email to a placeholder walk-up address', async () => {
+  it('sends no customer email to a placeholder walk-up address on Done', async () => {
     const res = mockRes();
     await handler(await req(true, { street: '12 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1 }), res);
     expect(res.statusCode).toBe(201);
@@ -108,5 +108,31 @@ describe('POST /api/operator/job (walk-up)', () => {
 
     const logs = await getDb().select().from(notificationLog);
     expect(logs.filter((l) => l.kind === 'done')).toHaveLength(0);
+  });
+
+  it('sends no customer email to a placeholder walk-up address on Notify', async () => {
+    const res = mockRes();
+    await handler(await req(true, { street: '13 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1 }), res);
+    expect(res.statusCode).toBe(201);
+
+    const { visit_id } = res.body as { visit_id: string };
+    const notifyRes = mockRes();
+    const cookie = `${OPERATOR_COOKIE_NAME}=${await signOperatorCookie()}`;
+    await notifyHandler(
+      { method: 'POST', headers: { cookie }, query: { id: visit_id }, body: {} } as any,
+      notifyRes,
+    );
+    expect(notifyRes.statusCode).toBe(200);
+    expect(notifyRes.body.status).toBe('ok');
+
+    // The visit should be marked heading_there despite no email being sent
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, visit_id));
+    expect(v!.status).toBe('heading_there');
+    expect(v!.headingThereAt).not.toBeNull();
+
+    // No on_our_way notification log entry for placeholder emails
+    const logs = await db.select().from(notificationLog);
+    expect(logs.filter((l) => l.kind === 'on_our_way')).toHaveLength(0);
   });
 });

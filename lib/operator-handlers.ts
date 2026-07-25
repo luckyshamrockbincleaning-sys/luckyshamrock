@@ -341,16 +341,19 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
       .where(eq(visit.id, visitId));
 
     // Idempotent on (visitId, 'on_our_way') — a double-tap sends no second email.
+    // Skip the email for placeholder addresses (walk-up customers who gave no email).
     const tpl = onOurWayTemplate({ name: row.name });
-    const result = await sendAndLog({
-      kind: 'on_our_way',
-      to: row.email,
-      subject: tpl.subject,
-      body: tpl.text,
-      html: tpl.html,
-      customerId: row.customerId,
-      visitId,
-    });
+    const result = isPlaceholderEmail(row.email)
+      ? { skipped: true as const }
+      : await sendAndLog({
+        kind: 'on_our_way',
+        to: row.email,
+        subject: tpl.subject,
+        body: tpl.text,
+        html: tpl.html,
+        customerId: row.customerId,
+        visitId,
+      });
 
     res.status(200).json({ status: 'ok', skipped: result.skipped ?? false });
   } catch (err) {
