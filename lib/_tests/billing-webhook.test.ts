@@ -163,4 +163,41 @@ describe('applyStripeEvent', () => {
     });
     expect(tag).toBe('payment_intent.succeeded:no_row');
   });
+
+  it('checkout.session.completed marks the QR payment and visit charged', async () => {
+    const cid = await makeCustomer('cus_qr');
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_qr_1');
+    const db = getDb();
+    await db.update(payment).set({ status: 'pending', method: 'qr' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+
+    const tag = await applyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_1', payment_status: 'paid', metadata: { visit_id: visitId }, payment_intent: 'pi_qr_1' } },
+    });
+
+    expect(tag).toBe('checkout.session.completed:applied');
+    const [p] = await db.select().from(payment).where(eq(payment.id, paymentId));
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(p!.status).toBe('succeeded');
+    expect(v!.paymentStatus).toBe('charged');
+  });
+
+  it('checkout.session.completed for an unknown visit is a safe no-op', async () => {
+    const tag = await applyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_x', payment_status: 'paid', metadata: { visit_id: crypto.randomUUID() } } },
+    });
+    expect(tag).toBe('checkout.session.completed:no_row');
+  });
+
+  it('ignores an unpaid checkout session', async () => {
+    const cid = await makeCustomer('cus_qr2');
+    const { visitId } = await makeVisitWithPayment(cid, 'pi_qr_2');
+    const tag = await applyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_2', payment_status: 'unpaid', metadata: { visit_id: visitId } } },
+    });
+    expect(tag).toBe('checkout.session.completed:ignored_unpaid');
+  });
 });

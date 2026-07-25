@@ -127,6 +127,29 @@ export async function applyStripeEvent(event: {
       return p ? 'charge.refunded:applied' : 'charge.refunded:no_row';
     }
 
+    // A doorstep QR payment completed on Stripe's hosted page. The session
+    // carries our visit id in metadata (set in createDoorstepCheckoutSession).
+    case 'checkout.session.completed': {
+      const visitId = typeof obj.metadata?.visit_id === 'string' ? obj.metadata.visit_id : null;
+      if (!visitId) return 'checkout.session.completed:missing_id';
+      if (obj.payment_status !== 'paid') return 'checkout.session.completed:ignored_unpaid';
+
+      const piId = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+      const [p] = await db
+        .update(payment)
+        .set({
+          status: 'succeeded',
+          ...(piId ? { stripePaymentIntentId: piId } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(payment.visitId, visitId))
+        .returning();
+      if (!p) return 'checkout.session.completed:no_row';
+
+      await db.update(visit).set({ paymentStatus: 'charged' }).where(eq(visit.id, visitId));
+      return 'checkout.session.completed:applied';
+    }
+
     default:
       return 'ignored';
   }
