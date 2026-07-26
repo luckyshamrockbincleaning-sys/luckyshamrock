@@ -74,10 +74,17 @@ function PasswordGate({ onAuthed }) {
   );
 }
 
+// Every payment_status the DB can hold needs an entry — a missing key renders
+// no badge at all, which silently hides unpaid work from the operator.
 const PAY_BADGE = {
   charged: { label: '💳 paid', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
   failed: { label: '⚠ card failed', color: '#7A2222', bg: '#F5DADA' },
   comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
+  paid_cash: { label: '💵 cash', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  paid_terminal: { label: '🔖 tapped', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  awaiting_payment: { label: '⏳ awaiting payment', color: '#7a5a12', bg: '#FBF0D5' },
+  unpaid: { label: '⚠ unpaid', color: '#7A2222', bg: '#F5DADA' },
+  refunded: { label: '↩ refunded', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
 };
 
 const BIN_LOCATION_LABEL = {
@@ -220,6 +227,83 @@ function PhotoStep({ n, title, hint, state, onChange, busy }) {
   );
 }
 
+// Walk-up job: someone flags the truck down. Deliberately minimal — street,
+// bins, and an optional email are all that's needed to start cleaning.
+function NewJobCard({ onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function submit() {
+    if (busy) return;
+    setErr('');
+    if (!form.street.trim() || !form.postal_code.trim()) {
+      setErr('Street and postal code are required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const body = {
+        street: form.street.trim(),
+        postal_code: form.postal_code.trim(),
+        bin_count: Number(form.bin_count) || 1,
+      };
+      if (form.email.trim()) body.email = form.email.trim();
+      if (form.name.trim()) body.name = form.name.trim();
+      const r = await fetch('/api/operator/job', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        if (r.status === 401) {
+          throw new Error('Session expired — sign in again to create jobs.');
+        }
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.message || j.status || `${r.status}`);
+      }
+      setForm({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+      setOpen(false);
+      onCreated();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="btn btn-primary ops-btn" style={{ width: '100%', marginBottom: 12 }} onClick={() => setOpen(true)}>
+        + New job here
+      </button>
+    );
+  }
+
+  const field = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  return (
+    <div className="ops-card" style={{ marginBottom: 12 }}>
+      <h2 style={{ marginTop: 0, fontSize: 17 }}>New job at this address</h2>
+      <Flash kind="err" text={err} />
+      <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
+      <input style={field} placeholder="Postal code *" value={form.postal_code} onChange={(e) => setForm({ ...form, postal_code: e.target.value })} />
+      <select style={field} value={form.bin_count} onChange={(e) => setForm({ ...form, bin_count: e.target.value })}>
+        <option value={1}>1 bin</option>
+        <option value={2}>2 bins</option>
+        <option value={3}>3 bins</option>
+      </select>
+      <input style={field} placeholder="Email (optional — for receipt)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      <input style={field} placeholder="Name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-go ops-btn" disabled={busy} onClick={submit}>{busy ? 'Creating…' : 'Start job'}</button>
+        <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function StopCard({ stop, onAction, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
@@ -227,6 +311,8 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const heading = stop.status === 'heading_there';
   const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
+  const [payMethod, setPayMethod] = useState('card_on_file');
+  const [amountOverride, setAmountOverride] = useState('');
   const [photoState, setPhotoState] = useState(() => {
     const saved = savedPhotos(stop.id);
     return saved?.clean
@@ -239,9 +325,12 @@ function StopCard({ stop, onAction, busy, showDate }) {
       ? { phase: 'ready', photo: saved.before.photo, filename: saved.before.filename, message: 'Photo restored.' }
       : { phase: 'idle', photo: null, filename: '', message: '' };
   });
-  const pay = PAY_BADGE[stop.payment_status];
+  // 'unpaid' is the default for every not-yet-serviced visit — showing it
+  // pre-completion would paint the whole route red before the operator has
+  // done anything. Only meaningful once the visit is done and still unpaid.
+  const pay = stop.payment_status === 'unpaid' && !isDone ? null : PAY_BADGE[stop.payment_status];
 
-  function doneWithDiscount() {
+  async function doneWithDiscount() {
     if (!photoState.photo) {
       setPhotoState((s) => ({ ...s, phase: 'error', message: 'Take a clean-bin photo before tapping Done.' }));
       return;
@@ -256,11 +345,19 @@ function StopCard({ stop, onAction, busy, showDate }) {
     }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-    const payload = { discount_cents, clean_photo: photoState.photo };
-    // Optional before shot → customer gets the wash animation in the email.
+    const payload = { discount_cents, clean_photo: photoState.photo, payment_method: payMethod };
+    const amt = parseFloat(amountOverride);
+    if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
     if (beforeState.photo) payload.before_photo = beforeState.photo;
+    const result = await onAction('done', stop, payload);
+    // onAction swallows errors and returns undefined on failure (and on a 401),
+    // so a falsy result means the Done did NOT go through — keep the persisted
+    // photos so the operator can retry without re-shooting them in the field.
+    if (!result) return;
     clearPhotos(stop.id);
-    onAction('done', stop, payload);
+    // Any QR result is surfaced by OpsApp (lifted state — see QrPanel), not
+    // here: this card is about to unmount when the list reloads to drop the
+    // now-done visit, so state kept on THIS component would vanish with it.
   }
 
   async function onPhotoChange(e) {
@@ -346,6 +443,55 @@ function StopCard({ stop, onAction, busy, showDate }) {
       )}
 
       {!isDone && !isCancelled && (
+        <div className="ops-pay" style={{ marginTop: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+            How are they paying?
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {[
+              ['card_on_file', '💳 Card on file'],
+              ['qr', '📱 QR code'],
+              ['terminal', '🔖 Tap in Stripe'],
+              ['cash', '💵 Cash'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                disabled={busy}
+                onClick={() => setPayMethod(value)}
+                style={{
+                  padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                  border: payMethod === value ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
+                  background: payMethod === value ? 'var(--green-soft, #eef6ef)' : '#fff',
+                  fontWeight: payMethod === value ? 600 : 400,
+                }}
+              >{label}</button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Amount&nbsp;$</label>
+            <input
+              type="number" min="0" max="1000" step="1" inputMode="decimal" placeholder="auto"
+              value={amountOverride} onChange={(e) => setAmountOverride(e.target.value)}
+              style={{ width: 90, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15 }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>blank = standard price</span>
+          </div>
+          {payMethod === 'terminal' && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>
+              <a
+                href="https://dashboard.stripe.com/payments"
+                target="_blank"
+                rel="noopener"
+                style={{ color: '#1d7a3d', fontWeight: 600 }}
+              >Open Stripe app to tap →</a>
+              <div>Collect there, then tap Done here to record it.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isDone && !isCancelled && (
         <div className="ops-discount" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
           <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Discount&nbsp;$</label>
           <input
@@ -391,8 +537,46 @@ function StopCard({ stop, onAction, busy, showDate }) {
   );
 }
 
+// QR result lives in OpsApp state (not the StopCard that created it) so it
+// survives the list reload that happens right after Done — see B1: the
+// just-completed visit drops out of the actionable list and its StopCard
+// unmounts, which used to take the QR with it before the customer ever saw it.
+function QrPanel({ qr, onDismiss }) {
+  if (!qr) return null;
+  return (
+    <div className="ops-card" style={{ textAlign: 'center', border: '1px solid #cde3cd', background: '#f7fbf7' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', textAlign: 'left' }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Have {qr.customerName} scan to pay</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>{qr.address}</div>
+        </div>
+        <button className="btn-ghost" style={{ padding: 0 }} onClick={onDismiss} aria-label="Dismiss">×</button>
+      </div>
+      {qr.svg
+        ? <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }} dangerouslySetInnerHTML={{ __html: qr.svg }} />
+        : <div style={{ fontSize: 12, marginTop: 8 }}>QR unavailable — use the link below.</div>}
+      <div style={{ marginTop: 8, fontSize: 12 }}>
+        <a href={qr.url} target="_blank" rel="noopener" style={{ color: '#1d7a3d' }}>or open the payment link</a>
+      </div>
+    </div>
+  );
+}
+
+// Distinct badge per underlying payment_status — a QR nobody scanned yet and
+// a walk-up with no card at all are not "card failed" (see N2).
+const ATTENTION_BADGE = {
+  failed: { label: '⚠ card failed', color: '#7A2222', bg: '#F5DADA' },
+  awaiting_payment: { label: '⏳ waiting on payment', color: '#7a5a12', bg: '#FBF0D5' },
+  unpaid: { label: '⚠ not collected', color: '#7A2222', bg: '#F5DADA' },
+};
+
 function AttentionCard({ item, onAction, busy }) {
   const amt = item.amount_cents != null ? `$${(item.amount_cents / 100).toFixed(2)}` : '—';
+  const badge = ATTENTION_BADGE[item.payment_status] || ATTENTION_BADGE.unpaid;
+  // Retry only makes sense for a genuinely declined card that still has a
+  // card on file — a QR nobody scanned or a walk-up with nothing on file
+  // would just 409 (see N2).
+  const canRetry = item.payment_status === 'failed' && item.has_card;
   return (
     <div className="ops-card">
       <div className="ops-card-head">
@@ -401,7 +585,7 @@ function AttentionCard({ item, onAction, busy }) {
           <div className="ops-name">{item.customer.name}</div>
           <div className="ops-addr">{item.customer.street}, {item.customer.city} {item.customer.postal_code}</div>
         </div>
-        <span className="visit-status" style={{ background: '#F5DADA', color: '#7A2222' }}>⚠ card failed</span>
+        <span className="visit-status" style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
       <div className="ops-meta">
         <span>Owed {amt}</span>
@@ -409,9 +593,15 @@ function AttentionCard({ item, onAction, busy }) {
       </div>
       {item.failure_reason && <div className="ops-notes">{item.failure_reason}</div>}
       <div className="ops-actions">
-        <button className="btn btn-primary ops-btn" disabled={busy || !item.has_card} onClick={() => onAction('retry', item)}>
-          {item.has_card ? 'Retry charge' : 'No card on file'}
-        </button>
+        {canRetry ? (
+          <button className="btn btn-primary ops-btn" disabled={busy} onClick={() => onAction('retry', item)}>
+            Retry charge
+          </button>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+            {item.payment_status === 'awaiting_payment' ? 'Waiting on the customer to scan.' : 'Collect at the door.'}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -423,6 +613,9 @@ function OpsApp() {
   const [data, setData] = useState({ loading: true, stops: [], date: null });
   const [flash, setFlash] = useState({ kind: '', text: '' });
   const [busy, setBusy] = useState(false);
+  // QR from the most recent Done tap — lifted up here (not in StopCard) so it
+  // survives the list reload that follows every Done. See QrPanel.
+  const [qr, setQr] = useState(null);
 
   const load = useCallback(async (which) => {
     setData((d) => ({ ...d, loading: true }));
@@ -451,6 +644,13 @@ function OpsApp() {
     load(view);
   }, [load, view]);
 
+  // A stale QR panel must not follow the operator across tabs — clear it on
+  // every view change so switching away from (or back to) Today can't leave
+  // a previous customer's live payment link on screen (see N5).
+  useEffect(() => {
+    setQr(null);
+  }, [view]);
+
   async function onAction(action, stop, opts = {}) {
     setBusy(true);
     setFlash({ kind: '', text: '' });
@@ -469,8 +669,20 @@ function OpsApp() {
       if (action === 'done' && opts.discount_cents > 0) {
         body.discount_cents = opts.discount_cents;
       }
+      // These photo fields must be forwarded explicitly. The server combines
+      // before + after photos to generate the leprechaun wash animation GIF in
+      // the done email. Omitting either one silently disables the animation.
+      if (action === 'done' && opts.before_photo) {
+        body.before_photo = opts.before_photo;
+      }
       if (action === 'done' && opts.clean_photo) {
         body.clean_photo = opts.clean_photo;
+      }
+      if (action === 'done' && opts.payment_method) {
+        body.payment_method = opts.payment_method;
+      }
+      if (action === 'done' && opts.amount_cents) {
+        body.amount_cents = opts.amount_cents;
       }
 
       const r = await fetch('/api/operator/act', {
@@ -492,11 +704,37 @@ function OpsApp() {
         // Surface the charge outcome alongside the "done" confirmation.
         let chargeNote = '';
         const c = j.charge;
-        if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
+        // QR is the exception: charge.ok only means "Stripe session created",
+        // NOT that the customer has paid. Never tell the operator money
+        // arrived until the webhook confirms it. Guard on payment_url too —
+        // if Stripe hiccuped and createDoorstepCheckoutSession returned null,
+        // there's no code to scan, so fall through to nothing_collected
+        // instead of sending the operator to show a nonexistent QR.
+        if (opts.payment_method === 'qr' && j.payment_url) chargeNote = ' Awaiting payment — have them scan the code.';
+        else if (j.nothing_collected) chargeNote = ' ⚠ Nothing collected — no card on file. Settle with cash or QR.';
+        else if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
         else if (c?.attempted && c.ok && c.amount_cents === 0) chargeNote = ' Comped.';
         else if (c?.attempted && !c.ok) chargeNote = ' ⚠ Card declined — collect another way.';
         const next = j.next_visit_date ? `next clean ${formatDate(j.next_visit_date)}.` : 'no more scheduled cleans.';
-        setFlash({ kind: c?.attempted && !c.ok ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
+        const troubled = (c?.attempted && !c.ok) || j.nothing_collected;
+        setFlash({ kind: troubled ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
+        // Lifted out of StopCard: the visit is about to drop out of the
+        // actionable list on reload below, which would unmount the card (and
+        // the QR with it) before the operator could show the customer.
+        if (j.payment_url) {
+          setQr({
+            visitId: stop.id,
+            url: j.payment_url,
+            svg: j.payment_qr_svg || '',
+            customerName: stop.customer_name,
+            address: `${stop.street}, ${stop.city} ${stop.postal_code}`,
+          });
+        } else {
+          // No code on this Done — clear any stale panel from a PREVIOUS
+          // customer's QR. Otherwise it stays pinned on screen and the next
+          // customer's scan could post against the wrong visit (see N5).
+          setQr(null);
+        }
       } else if (action === 'skip') {
         setFlash({ kind: 'ok', text: `Skipped ${stop.customer_name}.` });
       } else if (action === 'note') {
@@ -511,6 +749,7 @@ function OpsApp() {
         });
       }
       await load(view);
+      return j;
     } catch (e) {
       setFlash({ kind: 'err', text: e.message });
     } finally {
@@ -559,13 +798,17 @@ function OpsApp() {
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
 
+      {view === 'today' && <NewJobCard onCreated={load} />}
+
+      <QrPanel qr={qr} onDismiss={() => setQr(null)} />
+
       {data.loading ? (
         <div className="ops-card"><p>Loading…</p></div>
       ) : data.stops.length === 0 ? (
         <div className="ops-card">
           <p className="muted">
             {view === 'today' ? 'No stops scheduled today.'
-              : view === 'attention' ? 'No failed charges — all paid up. 🍀'
+              : view === 'attention' ? 'Nothing needs attention — all paid up. 🍀'
               : 'Nothing booked after today.'}
           </p>
         </div>

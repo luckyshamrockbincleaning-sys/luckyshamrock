@@ -44,8 +44,14 @@ async function authedReq(query: Record<string, string> = {}, body: unknown = {})
   return { method: query.method ?? 'GET', headers, query, body };
 }
 
-/** Seed a done visit with the given payment_status (+ a matching payment row). */
-async function seedVisit(opts: { paymentStatus: 'failed' | 'charged' | 'unpaid'; withCard?: boolean; amountCents?: number }): Promise<string> {
+/** Seed a visit with the given payment_status (+ a matching payment row for failed/charged). */
+async function seedVisit(opts: {
+  paymentStatus: 'failed' | 'charged' | 'unpaid' | 'awaiting_payment';
+  withCard?: boolean;
+  amountCents?: number;
+  /** Defaults to 'done' — most attention scenarios are post-clean. */
+  visitStatus?: 'done' | 'scheduled';
+}): Promise<string> {
   const db = getDb();
   const customerId = crypto.randomUUID();
   await db.insert(customer).values({
@@ -64,9 +70,13 @@ async function seedVisit(opts: { paymentStatus: 'failed' | 'charged' | 'unpaid';
     id: subId, customerId, cadence: 'monthly', binCount: 1, startedOn: new Date('2026-06-01'),
   });
   const visitId = crypto.randomUUID();
+  const visitStatus = opts.visitStatus ?? 'done';
   await db.insert(visit).values({
     id: visitId, customerId, subscriptionId: subId, binCount: null,
-    scheduledFor: new Date('2026-06-10'), status: 'done', doneAt: new Date(), paymentStatus: opts.paymentStatus,
+    scheduledFor: new Date('2026-06-10'),
+    status: visitStatus,
+    doneAt: visitStatus === 'done' ? new Date() : null,
+    paymentStatus: opts.paymentStatus,
   });
   if (opts.paymentStatus === 'failed' || opts.paymentStatus === 'charged') {
     await db.insert(payment).values({
@@ -76,29 +86,61 @@ async function seedVisit(opts: { paymentStatus: 'failed' | 'charged' | 'unpaid';
       failureReason: opts.paymentStatus === 'failed' ? 'Your card was declined.' : null,
     });
   }
+  // A real awaiting_payment visit has a pending QR payment row — this is what
+  // handleAttention's join must resolve to surface the amount owed (see N2).
+  if (opts.paymentStatus === 'awaiting_payment') {
+    await db.insert(payment).values({
+      id: crypto.randomUUID(), customerId, visitId,
+      amountCents: opts.amountCents ?? 3500, discountCents: 0,
+      status: 'pending',
+      method: 'qr',
+    });
+  }
   return visitId;
 }
 
-describe('operator — needs-attention (failed charges)', () => {
+describe('operator — needs-attention (payment still needs action)', () => {
   it('requires operator auth', async () => {
     const res = mockRes();
     await handleAttention({ method: 'GET', headers: {}, query: {} } as any, res);
     expect(res.statusCode).toBe(401);
   });
 
-  it('lists only visits whose charge failed', async () => {
+  it('lists done visits that are failed, awaiting_payment, or unpaid — but not settled ones or future work', async () => {
+    // B5: a forgotten Cash tap (or an ignored QR, or a declined card) used to
+    // vanish from every operator view the moment the visit left "Today" —
+    // this is the one surface that must catch all three.
     const failedId = await seedVisit({ paymentStatus: 'failed', withCard: true });
-    await seedVisit({ paymentStatus: 'charged', withCard: true });
-    await seedVisit({ paymentStatus: 'unpaid', withCard: true });
+    const awaitingId = await seedVisit({ paymentStatus: 'awaiting_payment', withCard: false });
+    const unpaidId = await seedVisit({ paymentStatus: 'unpaid', withCard: false }); // nothing collected, done anyway
+    await seedVisit({ paymentStatus: 'charged', withCard: true }); // settled — must not show
+    // Not yet serviced — defaulting to 'unpaid' must not flood this list with
+    // every not-yet-done visit on the route.
+    await seedVisit({ paymentStatus: 'unpaid', withCard: true, visitStatus: 'scheduled' });
 
     const res = mockRes();
     await handleAttention(await authedReq(), res);
 
     expect(res.statusCode).toBe(200);
-    const ids = res.body.visits.map((v: any) => v.id);
-    expect(ids).toEqual([failedId]);
-    expect(res.body.visits[0]).toMatchObject({ amount_cents: 3500, customer: expect.objectContaining({ name: 'Pat' }) });
-    expect(res.body.visits[0].failure_reason).toMatch(/declined/i);
+    const ids = res.body.visits.map((v: any) => v.id).sort();
+    expect(ids).toEqual([awaitingId, failedId, unpaidId].sort());
+
+    const failedEntry = res.body.visits.find((v: any) => v.id === failedId);
+    expect(failedEntry).toMatchObject({
+      payment_status: 'failed',
+      amount_cents: 3500,
+      customer: expect.objectContaining({ name: 'Pat' }),
+    });
+    expect(failedEntry.failure_reason).toMatch(/declined/i);
+
+    // N2: payment_status must ride along so /ops can pick the right badge —
+    // and the amount must resolve for a pending QR row, not just a failed one.
+    const awaitingEntry = res.body.visits.find((v: any) => v.id === awaitingId);
+    expect(awaitingEntry).toMatchObject({ payment_status: 'awaiting_payment', amount_cents: 3500 });
+
+    const unpaidEntry = res.body.visits.find((v: any) => v.id === unpaidId);
+    expect(unpaidEntry.payment_status).toBe('unpaid');
+    expect(unpaidEntry.has_card).toBe(false);
   });
 });
 

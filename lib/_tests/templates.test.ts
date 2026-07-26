@@ -132,6 +132,22 @@ describe('doneTemplate', () => {
     expect(t.text.toLowerCase()).toContain('charged');
   });
 
+  it('tells a cash customer they paid in cash — never claims the card on file', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'cash' } });
+    expect(t.text.toLowerCase()).toContain('cash');
+    expect(t.html.toLowerCase()).toContain('cash');
+    expect(t.text.toLowerCase()).not.toContain('card on file');
+    expect(t.html.toLowerCase()).not.toContain('card on file');
+  });
+
+  it('tells a terminal customer they paid by card in person — never claims the card on file', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'terminal' } });
+    expect(t.text.toLowerCase()).toContain('in person');
+    expect(t.html.toLowerCase()).toContain('in person');
+    expect(t.text.toLowerCase()).not.toContain('card on file');
+    expect(t.html.toLowerCase()).not.toContain('card on file');
+  });
+
   it('says a comped clean was free', () => {
     const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'comped' } });
     expect(t.text.toLowerCase()).toContain('no charge');

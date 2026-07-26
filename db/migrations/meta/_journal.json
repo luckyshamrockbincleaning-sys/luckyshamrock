@@ -64,6 +64,20 @@
       "when": 1783636793014,
       "tag": "0008_lonely_luke_cage",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784925904851,
+      "tag": "0009_famous_hiroim",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785014998207,
+      "tag": "0010_heavy_darwin",
+      "breakpoints": true
     }
   ]
 }

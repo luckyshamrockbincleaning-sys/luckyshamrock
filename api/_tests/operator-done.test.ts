@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { handleDone as handler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, visit, notificationLog } from '../../db/schema.js';
+import { customer, visit, notificationLog, payment } from '../../db/schema.js';
 import { signOperatorCookie, OPERATOR_COOKIE_NAME } from '../../lib/operator.js';
 import { and, eq } from 'drizzle-orm';
+import * as templates from '../../lib/email/templates.js';
+import * as billing from '../../lib/billing.js';
 
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
@@ -249,5 +251,117 @@ describe('POST /api/operator/visit/:id/done', () => {
     await handler(await req(true, v1), res);
     expect(res.statusCode).toBe(409);
     expect(res.body.status).toBe('not_actionable');
+  });
+
+  it('records a cash payment without calling Stripe', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    expect(v!.paymentStatus).toBe('paid_cash');
+    const rows = await db.select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.method).toBe('cash');
+    expect(rows[0]!.status).toBe('succeeded');
+    expect(rows[0]!.amountCents).toBe(4500); // one-off, 1 bin
+  });
+
+  it('honours an operator amount override on cash', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', amount_cents: 4000 }), res);
+
+    expect(res.statusCode).toBe(200);
+    const rows = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows[0]!.amountCents).toBe(4000);
+  });
+
+  it('records a terminal (tap in Stripe app) payment', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'terminal' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.paymentStatus).toBe('paid_terminal');
+    const rows = await db.select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows[0]!.method).toBe('terminal');
+  });
+
+  it('rejects a negative amount override', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', amount_cents: -100 }), res);
+
+    expect(res.statusCode).toBe(400);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
+  });
+
+  it('marks a QR payment awaiting_payment and returns no url when Stripe is unconfigured', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const spy = vi.spyOn(templates, 'doneTemplate');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'qr' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    // Stripe is unconfigured in tests: the clean still completes, no session
+    // is created (charge.attempted stays false), so the email correctly gets
+    // no payment sentence at all.
+    expect(v!.paymentStatus).toBe('unpaid');
+    expect(spy.mock.calls[0]![0].charge).toEqual({ kind: 'none' });
+    spy.mockRestore();
+  });
+
+  it('does not tell the customer they were charged when a QR checkout session is created but not yet paid', async () => {
+    // Regression test: a Stripe Checkout Session being *created* is not the
+    // same as the customer having *paid* — confirmation only arrives later via
+    // the checkout.session.completed webhook (Task 5). The done email must
+    // never say "Your card on file was charged" for QR at Done time, even
+    // when the session-create call succeeds. Simulate that success path by
+    // mocking createDoorstepCheckoutSession directly (Stripe itself stays
+    // unconfigured/untouched).
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const templateSpy = vi.spyOn(templates, 'doneTemplate');
+    const sessionSpy = vi.spyOn(billing, 'createDoorstepCheckoutSession').mockResolvedValueOnce({
+      url: 'https://checkout.stripe.com/c/pay/cs_test_qr',
+      sessionId: 'cs_test_qr',
+    });
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'qr' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    expect(v!.paymentStatus).toBe('awaiting_payment');
+    // The HTTP `charge` object is untouched by this fix — /ops still needs to
+    // know a session was created (it renders the QR / payment link there).
+    expect(res.body.charge).toMatchObject({ attempted: true, ok: true, amount_cents: 4500 });
+    // But the customer-facing email must NOT claim a charge happened.
+    expect(templateSpy).toHaveBeenCalledTimes(1);
+    expect(templateSpy.mock.calls[0]![0].charge).toEqual({ kind: 'none' });
+
+    templateSpy.mockRestore();
+    sessionSpy.mockRestore();
   });
 });

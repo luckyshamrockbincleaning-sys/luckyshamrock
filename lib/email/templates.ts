@@ -125,13 +125,18 @@ export function doneTemplate(p: {
   /**
    * Payment outcome for this clean — the email doubles as the customer's
    * receipt, since charging happens silently on the operator's Done tap.
-   * - charged: card billed `amountCents` (include the amount).
-   * - comped:  fully discounted — explicitly say no charge.
-   * - failed:  card declined — tell the customer so the /manage banner isn't
-   *            their first hint.
-   * - none:    no billing attempted (no card on file / Stripe unconfigured).
+   * - charged:  card billed `amountCents` (include the amount).
+   * - cash:     collected in cash at the door — no card was touched.
+   * - terminal: collected via tap in the Stripe app (in person) — the
+   *             customer's card on file was NOT charged.
+   * - comped:   fully discounted — explicitly say no charge.
+   * - failed:   card declined — tell the customer so the /manage banner isn't
+   *             their first hint.
+   * - none:     no billing attempted (no card on file / Stripe unconfigured),
+   *             or a QR was issued but not yet paid (confirmation lands via
+   *             a separate receipt email once the customer pays).
    */
-  charge?: { kind: 'charged' | 'comped' | 'failed' | 'none'; amountCents?: number };
+  charge?: { kind: 'charged' | 'cash' | 'terminal' | 'comped' | 'failed' | 'none'; amountCents?: number };
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
@@ -171,6 +176,10 @@ export function doneTemplate(p: {
   let chargeLine = '';
   if (p.charge?.kind === 'charged' && typeof p.charge.amountCents === 'number') {
     chargeLine = `Your card on file was charged ${formatCad(p.charge.amountCents)}.`;
+  } else if (p.charge?.kind === 'cash') {
+    chargeLine = `Paid in cash — thank you!`;
+  } else if (p.charge?.kind === 'terminal') {
+    chargeLine = `Paid by card in person.`;
   } else if (p.charge?.kind === 'comped') {
     chargeLine = `This clean was on us — no charge.`;
   } else if (p.charge?.kind === 'failed') {
@@ -227,6 +236,28 @@ export function doneTemplate(p: {
  * Refund receipt, triggered by the charge.refunded webhook (refunds are issued
  * from the Stripe dashboard/app, so this email is the customer's only signal).
  */
+/**
+ * Payment confirmation for a doorstep QR payment, sent when Stripe's
+ * checkout.session.completed lands. The done email goes out at Done time with
+ * no payment sentence (nobody had paid yet), so this is the customer's only
+ * confirmation — and it's what the post-payment page's "your receipt is on its
+ * way by email" promises.
+ */
+export function receiptTemplate(p: { name: string; amountCents: number }): RenderedEmail {
+  const subject = `Payment received — ${formatCad(p.amountCents)}`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `Thanks — we've received your payment of ${formatCad(p.amountCents)} for your garbage bin cleaning.\n\n` +
+    `Questions? Just reply to this email.\n\n` +
+    FOOTER_TEXT;
+  const html = brandWrap(
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>Thanks — we've received your payment of <strong>${formatCad(p.amountCents)}</strong> for your garbage bin cleaning.</p>` +
+    `<p style="color:#666">Questions? Just reply to this email.</p>`,
+  );
+  return { subject, html, text };
+}
+
 export function refundTemplate(p: { name: string; amountCents: number }): RenderedEmail {
   const subject = `Your ${formatCad(p.amountCents)} refund from Lucky Shamrock`;
   const text =

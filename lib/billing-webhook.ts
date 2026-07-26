@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
 import { sendAndLog } from './notifications.js';
-import { refundTemplate } from './email/templates.js';
+import { refundTemplate, receiptTemplate } from './email/templates.js';
+import { isPlaceholderEmail } from './walkup-email.js';
 
 /**
  * Applies a verified Stripe event to our DB. Kept separate from the HTTP handler
@@ -125,6 +126,69 @@ export async function applyStripeEvent(event: {
         }
       }
       return p ? 'charge.refunded:applied' : 'charge.refunded:no_row';
+    }
+
+    // A doorstep QR payment completed on Stripe's hosted page. The session
+    // carries our visit id in metadata (set in createDoorstepCheckoutSession).
+    case 'checkout.session.completed': {
+      const visitId = typeof obj.metadata?.visit_id === 'string' ? obj.metadata.visit_id : null;
+      if (!visitId) return 'checkout.session.completed:missing_id';
+      if (obj.payment_status !== 'paid') return 'checkout.session.completed:ignored_unpaid';
+
+      const piId = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+      // Scope to the visit's pending QR row specifically — payment.visitId is
+      // not unique (a retried charge inserts a second row per visit; see
+      // handleRetry in operator-handlers.ts). An unscoped update here would
+      // flip every matching row to succeeded and could collide on the
+      // stripePaymentIntentId unique constraint, throwing and making Stripe
+      // retry the event forever.
+      const [p] = await db
+        .update(payment)
+        .set({
+          status: 'succeeded',
+          ...(piId ? { stripePaymentIntentId: piId } : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(payment.visitId, visitId), eq(payment.status, 'pending'), eq(payment.method, 'qr'))
+        )
+        .returning();
+      if (!p) return 'checkout.session.completed:no_row';
+
+      await db.update(visit).set({ paymentStatus: 'charged' }).where(eq(visit.id, visitId));
+
+      // Tell the customer — the done email already went out at Done time with
+      // NO payment sentence (QR renders charge:{kind:'none'} there, since at
+      // that point nobody had paid). This confirmation, and paid.html's
+      // promise that "your receipt is on its way by email", is what fulfills
+      // that promise. Best-effort: an email failure must not make the webhook
+      // 500 (Stripe would retry the whole event). Uses the 'receipt' kind
+      // (not 'done') because 'done' already consumed the (visit_id, 'done')
+      // idempotency slot; sendAndLog's (visit_id, kind) idempotency on
+      // 'receipt' absorbs Stripe redeliveries of this event instead.
+      try {
+        const [c] = await db.select().from(customer).where(eq(customer.id, p.customerId));
+        // Walk-up customers who declined to give an email get a minted
+        // walkup+<8hex>@luckyshamrock.ca placeholder — mail to it bounces
+        // against our own domain. handleDone/handleNotify already skip these;
+        // this send path must honor the same invariant (see N3).
+        if (c && !isPlaceholderEmail(c.email)) {
+          const tpl = receiptTemplate({ name: c.name, amountCents: p.amountCents });
+          await sendAndLog({
+            kind: 'receipt',
+            to: c.email,
+            subject: tpl.subject,
+            body: tpl.text,
+            html: tpl.html,
+            customerId: c.id,
+            visitId: p.visitId,
+          });
+        }
+      } catch (err) {
+        console.error('[billing-webhook] receipt email failed (ledger already updated)', err);
+      }
+
+      return 'checkout.session.completed:applied';
     }
 
     default:

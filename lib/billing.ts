@@ -156,3 +156,55 @@ export async function chargeOffSession(input: ChargeInput): Promise<ChargeResult
     };
   }
 }
+
+export interface DoorstepCheckoutInput {
+  visitId: string;
+  amountCents: number;
+  description: string;
+}
+
+export interface DoorstepCheckoutResult {
+  url: string;
+  sessionId: string;
+}
+
+/**
+ * Stripe-hosted checkout for a doorstep QR payment. The customer scans the QR
+ * on the operator's phone and pays on Stripe's page (Apple Pay / Google Pay /
+ * card), so we host no payment UI and add no serverless function. Confirmation
+ * arrives as `checkout.session.completed` on the existing webhook.
+ *
+ * Returns null (never throws) when Stripe is unconfigured or the call fails —
+ * the caller falls back to another payment method and Done still completes.
+ */
+export async function createDoorstepCheckoutSession(
+  input: DoorstepCheckoutInput,
+): Promise<DoorstepCheckoutResult | null> {
+  if (!isStripeConfigured()) return null;
+  const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
+  try {
+    const stripe = getStripe();
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'cad',
+            unit_amount: input.amountCents,
+            product_data: { name: input.description },
+          },
+        },
+      ],
+      metadata: { visit_id: input.visitId },
+      payment_intent_data: { metadata: { visit_id: input.visitId } },
+      success_url: `${siteUrl}/paid.html`,
+      cancel_url: `${siteUrl}/`,
+    });
+    if (!session.url) return null;
+    return { url: session.url, sessionId: session.id };
+  } catch (err) {
+    console.error('[billing] doorstep checkout session failed', err);
+    return null;
+  }
+}

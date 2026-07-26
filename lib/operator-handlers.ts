@@ -21,6 +21,7 @@ import {
   operatorTodayISO,
   toOperatorVisit,
 } from './operator.js';
+import { normalizePostalCode } from './postal.js';
 import { sendAndLog } from './notifications.js';
 import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID, DONE_WASH_GIF_CID } from './email/templates.js';
 import { generateWashGif } from './wash-gif.js';
@@ -28,11 +29,13 @@ import { LEPRECHAUN_SPRITES } from './leprechaun-sprites.js';
 import { generateReceiptPdf } from './receipt-pdf.js';
 import { signRatingToken } from './rating-token.js';
 import { isStripeConfigured } from './stripe.js';
-import { chargeOffSession } from './billing.js';
+import { chargeOffSession, createDoorstepCheckoutSession } from './billing.js';
 import { baseChargeCents, finalChargeCents } from './pricing.js';
 import { formatFriendlyDate } from './dates.js';
 import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
+import { isPlaceholderEmail } from './walkup-email.js';
+import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIONABLE_VISIT_STATUSES: Array<'scheduled' | 'heading_there'> = ['scheduled', 'heading_there'];
@@ -51,6 +54,20 @@ const cleanPhotoSchema = z.object({
   filename: z.string().trim().min(1).max(160).optional(),
   mime_type: z.string().trim().min(1).max(80),
   content_base64: z.string().trim().min(1),
+});
+const donePaymentSchema = z.object({
+  payment_method: z.enum(['card_on_file', 'cash', 'terminal', 'qr']).default('card_on_file'),
+  // Operator override for doorstep deals ("$40 cash"). Server still floors it
+  // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
+  amount_cents: z.number().int().min(0).max(100_000).optional(),
+});
+const newJobSchema = z.object({
+  street: z.string().trim().min(1).max(200),
+  postal_code: z.string().trim().min(1).max(10),
+  bin_count: z.number().int().min(1).max(3).default(1),
+  email: z.string().trim().toLowerCase().email().optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  city: z.string().trim().min(1).max(120).optional(),
 });
 
 // Columns selected for the operator stop view (customer + subscription join).
@@ -209,6 +226,77 @@ export async function handleUpcoming(req: VercelRequest, res: VercelResponse): P
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/job — create a job for a walk-up customer
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * The neighbour who flags the truck down. Deliberately skips the service-area
+ * gate: that guard exists to stop out-of-area self-serve bookings, and the
+ * operator is physically standing at the bin. Creates a real customer so the
+ * receipt, wash GIF, and rating funnel all work and the customer can be
+ * upsold a plan later.
+ */
+export async function handleNewJob(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = newJobSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data = parsed.data;
+
+  try {
+    const db = getDb();
+    const visitId = crypto.randomUUID();
+    // customer.email is NOT NULL + UNIQUE. A walk-up who won't share an email
+    // still needs a valid row, so mint a routable-looking placeholder; the
+    // send path skips these (see notifications).
+    const email = data.email ?? `walkup+${visitId.slice(0, 8)}@luckyshamrock.ca`;
+
+    // Read outside the transaction (mirrors api/book.ts).
+    const [existing] = await db.select().from(customer).where(eq(customer.email, email));
+    const customerId = existing?.id ?? crypto.randomUUID();
+    const isNewCustomer = !existing;
+
+    // Customer insert (if new) + visit insert in one transaction — a mid-flight
+    // failure must not leave an orphan customer with zero visits behind.
+    await db.transaction(async (tx) => {
+      if (isNewCustomer) {
+        await tx.insert(customer).values({
+          id: customerId,
+          email,
+          name: data.name ?? 'Walk-up customer',
+          street: data.street,
+          city: data.city ?? 'Fort Saskatchewan',
+          postalCode: normalizePostalCode(data.postal_code),
+          pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
+        });
+      }
+
+      await tx.insert(visit).values({
+        id: visitId,
+        customerId,
+        subscriptionId: null,
+        binCount: data.bin_count,
+        scheduledFor: new Date(`${operatorTodayISO()}T12:00:00Z`),
+        status: 'scheduled',
+      });
+    });
+
+    res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId });
+  } catch (err) {
+    console.error('[operator/job] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // POST /api/operator/visit/:id/notify  → on_our_way email + heading_there
 // ─────────────────────────────────────────────────────────────────────
 export async function handleNotify(req: VercelRequest, res: VercelResponse): Promise<void> {
@@ -256,16 +344,19 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
       .where(eq(visit.id, visitId));
 
     // Idempotent on (visitId, 'on_our_way') — a double-tap sends no second email.
+    // Skip the email for placeholder addresses (walk-up customers who gave no email).
     const tpl = onOurWayTemplate({ name: row.name });
-    const result = await sendAndLog({
-      kind: 'on_our_way',
-      to: row.email,
-      subject: tpl.subject,
-      body: tpl.text,
-      html: tpl.html,
-      customerId: row.customerId,
-      visitId,
-    });
+    const result = isPlaceholderEmail(row.email)
+      ? { skipped: true as const }
+      : await sendAndLog({
+        kind: 'on_our_way',
+        to: row.email,
+        subject: tpl.subject,
+        body: tpl.text,
+        html: tpl.html,
+        customerId: row.customerId,
+        visitId,
+      });
 
     res.status(200).json({ status: 'ok', skipped: result.skipped ?? false });
   } catch (err) {
@@ -295,6 +386,15 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const discountCents = Number.isFinite(req.body?.discount_cents)
     ? Math.max(0, Math.trunc(req.body.discount_cents))
     : 0;
+  const paymentParsed = donePaymentSchema.safeParse({
+    payment_method: req.body?.payment_method,
+    amount_cents: req.body?.amount_cents,
+  });
+  if (!paymentParsed.success) {
+    res.status(400).json({ status: 'invalid', message: 'payment_method or amount_cents is invalid' });
+    return;
+  }
+  const paymentMethod = paymentParsed.data.payment_method;
   const cleanPhoto = parsePhotoAttachment(req.body?.clean_photo, 'clean_photo');
   if (!cleanPhoto.ok) {
     res.status(400).json({ status: 'invalid', message: cleanPhoto.message });
@@ -378,6 +478,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       attempted: false,
       ok: false,
     };
+    let paymentUrl: string | null = null;
+    let paymentQrSvg: string | null = null;
     const alreadyBilled = row.paymentStatus === 'charged' || row.paymentStatus === 'comped';
     // Cadence + bin count are needed by both billing and the PDF receipt.
     let cadence: Cadence | null = null;
@@ -388,8 +490,66 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       binCount = sub?.binCount ?? binCount;
     }
     const baseCents = baseChargeCents(cadence, binCount);
-    if (!alreadyBilled && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
-      const amount = finalChargeCents(baseCents, discountCents);
+    // The operator's amount override (if entered in /ops) replaces the
+    // computed standard price for EVERY settlement method — the amount field
+    // is editable no matter which payment button is selected, not just the
+    // doorstep ones. Compute this once so all branches (and the receipt PDF
+    // below, which must show a line item that agrees with the total) use the
+    // same effective per-service amount.
+    const effectiveBaseCents = paymentParsed.data.amount_cents ?? baseCents;
+    // Doorstep settlement: the operator collected in person. No Stripe call —
+    // the money is already in hand (cash) or captured in the Stripe app
+    // (terminal, reconciled there by amount/time).
+    // QR: Stripe hosts the payment page; we only hand the customer a link.
+    // The visit completes now and the money confirms asynchronously via the
+    // checkout.session.completed webhook.
+    if (!alreadyBilled && paymentMethod === 'qr') {
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const session = await createDoorstepCheckoutSession({
+        visitId,
+        amountCents: amount,
+        description: `Garbage bin cleaning — ${binCount} bin${binCount > 1 ? 's' : ''}`,
+      });
+      if (session) {
+        paymentUrl = session.url;
+        // Rendered server-side so /ops needs no QR library (and no extra CDN
+        // script). ~2 KB of SVG, injected straight into the page.
+        try {
+          paymentQrSvg = await QRCode.toString(session.url, { type: 'svg', margin: 1, width: 240 });
+        } catch (err) {
+          console.error('[operator/visit/done] qr render failed (link still returned)', err);
+        }
+        await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+        await db.insert(payment).values({
+          id: crypto.randomUUID(),
+          customerId: row.customerId,
+          visitId,
+          amountCents: amount,
+          discountCents,
+          status: 'pending',
+          method: 'qr',
+        });
+        charge = { attempted: true, ok: true, amount_cents: amount };
+      }
+    } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
+      await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
+      await db.insert(payment).values({
+        id: crypto.randomUUID(),
+        customerId: row.customerId,
+        visitId,
+        amountCents: amount,
+        discountCents,
+        status: 'succeeded',
+        method: paymentMethod,
+      });
+      charge = { attempted: true, ok: true, amount_cents: amount };
+    } else if (!alreadyBilled && paymentMethod === 'card_on_file' && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
+      // B3: the /ops amount field is editable for card_on_file too — an
+      // operator who types $30 and leaves the default payment method must
+      // charge $30, not the standard price.
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
 
       if (amount <= 0) {
         // Fully discounted → comp it, no Stripe call.
@@ -445,13 +605,29 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // Idempotent on (visitId, 'done'). The email is the customer's receipt —
     // it carries the charge outcome and shows the next date in the same
     // friendly format as the booking confirmation.
+    // QR is special: `charge.ok` here only means "a Checkout Session was
+    // created," not "the customer paid." No money has moved yet — that's
+    // confirmed later by the checkout.session.completed webhook (Task 5) — so
+    // the email must not claim a charge. 'none' renders no payment sentence,
+    // which is the truthful state at Done time. This does NOT touch the
+    // `charge` object itself (still {attempted:true, ok:true, ...} for the
+    // /ops UI and the HTTP response) — only the email's view of it.
+    // cash/terminal each get their own truthful line (mirrors receipt-pdf.ts)
+    // instead of falling through to 'charged', which used to falsely tell a
+    // walk-up who paid cash that "your card on file was charged."
     const emailCharge: NonNullable<Parameters<typeof doneTemplate>[0]['charge']> = !charge.attempted
       ? { kind: 'none' }
-      : !charge.ok
-        ? { kind: 'failed' }
-        : charge.amount_cents === 0
-          ? { kind: 'comped' }
-          : { kind: 'charged', amountCents: charge.amount_cents };
+      : paymentMethod === 'qr'
+        ? { kind: 'none' }
+        : paymentMethod === 'cash'
+          ? { kind: 'cash' }
+          : paymentMethod === 'terminal'
+            ? { kind: 'terminal' }
+            : !charge.ok
+              ? { kind: 'failed' }
+              : charge.amount_cents === 0
+                ? { kind: 'comped' }
+                : { kind: 'charged', amountCents: charge.amount_cents };
     // Per-visit wash animation: the whole story lives in ONE GIF (before
     // hold → Lucky frantically foams the photo → after reveal), with subtle
     // corner timestamps as proof of service. When it generates, the email
@@ -513,8 +689,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
     // PDF receipt whenever money changed hands (or was explicitly comped) on
-    // THIS tap. Regular attachment (paperclip), not inline. Best-effort.
-    if (charge.attempted && charge.ok) {
+    // THIS tap. Regular attachment (paperclip), not inline. Best-effort. QR is
+    // excluded here: the customer hasn't actually paid yet at this point —
+    // confirmation arrives later via the checkout.session.completed webhook.
+    if (charge.attempted && charge.ok && paymentMethod !== 'qr') {
       try {
         const planLabel =
           cadence === null
@@ -534,10 +712,19 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           address: `${row.street}, ${row.city} ${row.postalCode}`,
           planLabel,
           binCount,
-          baseCents,
+          // The effective (possibly operator-overridden) base, so the line
+          // item minus the discount always agrees with TOTAL PAID below.
+          baseCents: effectiveBaseCents,
           discountCents,
           totalCents: charge.amount_cents ?? 0,
-          outcome: (charge.amount_cents ?? 0) === 0 ? 'comped' : 'charged',
+          outcome:
+            paymentMethod === 'cash'
+              ? 'cash'
+              : paymentMethod === 'terminal'
+                ? 'terminal'
+                : (charge.amount_cents ?? 0) === 0
+                  ? 'comped'
+                  : 'charged',
         });
         photoAttachments.push({
           filename: 'LuckyShamrock-Receipt.pdf',
@@ -566,7 +753,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       ratingBaseUrl,
       charge: emailCharge,
     });
-    const result = await sendAndLog({
+    const result = isPlaceholderEmail(row.email)
+      ? { skipped: true as const }
+      : await sendAndLog({
       kind: 'done',
       to: row.email,
       subject: tpl.subject,
@@ -582,6 +771,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       next_visit_date: nextVisitDate,
       skipped: result.skipped ?? false,
       charge,
+      // Explicit, unmistakable signal for /ops: nothing was collected on this
+      // tap (no card on file / Stripe unconfigured, and the operator didn't
+      // pick cash/terminal/qr). Done never blocks on this — it's a warning,
+      // not an error — but it must not be silently inferable-only from
+      // `charge.attempted` (easy to overlook client-side).
+      nothing_collected: !charge.attempted,
+      payment_url: paymentUrl,
+      payment_qr_svg: paymentQrSvg,
     });
   } catch (err) {
     console.error('[operator/visit/done] failed', err);
@@ -672,11 +869,13 @@ export async function handleNote(req: VercelRequest, res: VercelResponse): Promi
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// GET /api/operator/attention  → visits whose charge FAILED (need a retry)
+// GET /api/operator/attention  → done visits whose payment still needs action
 //
-// A declined card never blocks "Done", so failed charges would otherwise vanish.
-// This is the operator's "money owed" surface: done visits still flagged
-// payment_status='failed', newest first, with contact + the amount + reason.
+// A declined card never blocks "Done", so failed charges would otherwise vanish
+// — and so would a QR nobody's scanned yet, or a walk-up where nothing was
+// collected at all (no card on file, operator forgot to tap Cash). This is the
+// operator's "money owed" surface: done visits with payment_status in
+// (failed, awaiting_payment, unpaid), newest first, with contact + amount + reason.
 // ─────────────────────────────────────────────────────────────────────
 export async function handleAttention(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'GET') {
@@ -694,6 +893,7 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
         id: visit.id,
         scheduledFor: visit.scheduledFor,
         doneAt: visit.doneAt,
+        paymentStatus: visit.paymentStatus,
         amountCents: payment.amountCents,
         failureReason: payment.failureReason,
         name: customer.name,
@@ -705,8 +905,18 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
-      .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'failed')))
-      .where(eq(visit.paymentStatus, 'failed'))
+      // Widened from `status='failed'` only — an awaiting_payment visit's
+      // real payment row is still `pending` (QR not yet confirmed by the
+      // webhook), and that row is what carries the amount owed. Without
+      // 'pending' here the join never matches for those rows and the UI
+      // shows "Owed —" for every QR-in-flight visit (see N2).
+      .leftJoin(payment, and(eq(payment.visitId, visit.id), inArray(payment.status, ['failed', 'pending'])))
+      .where(
+        and(
+          eq(visit.status, 'done'),
+          inArray(visit.paymentStatus, ['failed', 'awaiting_payment', 'unpaid']),
+        ),
+      )
       .orderBy(desc(visit.doneAt), desc(payment.createdAt));
 
     // A visit can carry >1 failed payment row after retries — keep the newest per visit.
@@ -718,6 +928,10 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
       visits.push({
         id: r.id,
         scheduled_for: r.scheduledFor,
+        // /ops needs this to pick the right badge/label and to decide whether
+        // Retry is even offered — without it every row rendered as "card
+        // failed" regardless of the real state (see N2).
+        payment_status: r.paymentStatus,
         amount_cents: r.amountCents ?? null,
         failure_reason: r.failureReason ?? null,
         has_card: Boolean(r.hasCard),
