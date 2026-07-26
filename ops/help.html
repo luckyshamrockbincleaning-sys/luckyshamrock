@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/png" href="/assets/logo.png">
+<title>Lucky Shamrock — Taking Payment at the Door</title>
+<style>
+  :root {
+    --green: #1d7a3d;
+    --green-deep: #14522a;
+    --ink: #1f2a20;
+    --paper: #fbfcfa;
+    --hair: #dfe7dd;
+    --soft: #eef5ee;
+    --amber: #8a6414;
+    --amber-soft: #fdf4dd;
+    --red: #8a2020;
+    --red-soft: #fbe9e9;
+    --muted: #66755f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 17px;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 28px 20px 64px; }
+
+  header { border-bottom: 3px solid var(--green); padding-bottom: 16px; }
+  .kicker {
+    font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--green); font-weight: 700; margin: 0 0 6px;
+  }
+  h1 { font-size: 27px; line-height: 1.15; margin: 0 0 8px; text-wrap: balance; font-weight: 800; letter-spacing: -0.01em; }
+  .lede { margin: 0; color: var(--muted); font-size: 15.5px; }
+
+  .rule {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--soft); border-left: 4px solid var(--green);
+    padding: 14px 16px; margin-top: 20px; border-radius: 0 8px 8px 0;
+  }
+  .rule strong { display: block; }
+  .rule p { margin: 2px 0 0; font-size: 15px; color: #34452f; }
+
+  h2 {
+    font-size: 12.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--green); font-weight: 700; margin: 34px 0 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  h2::after { content: ''; flex: 1; height: 1px; background: var(--hair); }
+
+  .methods { display: grid; gap: 14px; }
+  .m {
+    border: 1px solid var(--hair); border-radius: 10px; background: #fff;
+    padding: 16px 18px; display: grid; grid-template-columns: 38px 1fr; gap: 14px;
+    break-inside: avoid;
+  }
+  .m-num {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--green); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 16px; font-variant-numeric: tabular-nums;
+  }
+  .m.alt .m-num { background: var(--muted); }
+  .m-name { font-size: 18px; font-weight: 700; margin: 3px 0 2px; }
+  .m-when { font-size: 14px; color: var(--muted); margin: 0 0 10px; }
+  .m ol { margin: 0; padding-left: 19px; font-size: 15.5px; }
+  .m ol li { margin-bottom: 5px; }
+  .m ol li:last-child { margin-bottom: 0; }
+  .sees {
+    margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hair);
+    font-size: 14px; color: var(--muted);
+  }
+  .sees b { color: var(--ink); font-weight: 600; }
+
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 13px; font-weight: 700; white-space: nowrap;
+  }
+  .pill.wait { background: var(--amber-soft); color: var(--amber); }
+  .pill.bad { background: var(--red-soft); color: var(--red); }
+  .pill.good { background: var(--soft); color: var(--green-deep); }
+
+  .block { border: 1px solid var(--hair); border-radius: 10px; padding: 16px 18px; background: #fff; break-inside: avoid; }
+  .block h3 { margin: 0 0 6px; font-size: 17px; }
+  .block p { margin: 0 0 8px; font-size: 15.5px; }
+  .block p:last-child { margin-bottom: 0; }
+  .block ul { margin: 6px 0 0; padding-left: 19px; font-size: 15.5px; }
+  .block li { margin-bottom: 5px; }
+
+  .warn { display: grid; gap: 12px; }
+  .w { border-radius: 10px; padding: 14px 16px; break-inside: avoid; }
+  .w.red { background: var(--red-soft); border: 1px solid #f0cfcf; }
+  .w.amber { background: var(--amber-soft); border: 1px solid #efe0b6; }
+  .w b { display: block; margin-bottom: 3px; }
+  .w p { margin: 0; font-size: 15px; }
+
+  footer { margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--hair); font-size: 13.5px; color: var(--muted); }
+
+  @media print {
+    body { font-size: 11.5pt; background: #fff; }
+    .wrap { max-width: none; padding: 0; }
+    .m, .block, .w { break-inside: avoid; }
+    h2 { margin-top: 18px; }
+    footer { margin-top: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <p class="kicker">🍀 Lucky Shamrock · Operator card</p>
+    <h1>Taking payment at the door</h1>
+    <p class="lede">Four ways to get paid. Pick one before you tap Done.</p>
+  </header>
+
+  <div class="rule">
+    <div>
+      <strong>The one rule</strong>
+      <p>Always tap <b>Done</b> when the bin is clean — that's what charges the card, sends the customer their photos, and closes the job. Choose how they're paying <em>before</em> you tap it.</p>
+    </div>
+  </div>
+
+  <h2>The four ways to get paid</h2>
+
+  <div class="methods">
+    <div class="m">
+      <div class="m-num">1</div>
+      <div>
+        <div class="m-name">💳 Card on file</div>
+        <p class="m-when">Most jobs. They saved a card when they booked.</p>
+        <ol>
+          <li>Nothing to pick — this is already selected.</li>
+          <li>Tap <b>Done</b>. It charges automatically.</li>
+        </ol>
+        <div class="sees">They get: their before/after animation and a receipt. Badge turns <span class="pill good">💳 paid</span></div>
+      </div>
+    </div>
+
+    <div class="m">
+      <div class="m-num">2</div>
+      <div>
+        <div class="m-name">💵 Cash</div>
+        <p class="m-when">They hand you cash at the door.</p>
+        <ol>
+          <li>Tap <b>Cash</b>.</li>
+          <li>Check the amount — it fills in for you ($45 first bin, $12 each extra). Type over it if you agreed on something different.</li>
+          <li>Tap <b>Done</b>.</li>
+        </ol>
+        <div class="sees">They get: a receipt that correctly says <b>paid in cash</b> — it never claims you charged a card. Badge turns <span class="pill good">💵 cash</span></div>
+      </div>
+    </div>
+
+    <div class="m">
+      <div class="m-num">3</div>
+      <div>
+        <div class="m-name">📱 QR code</div>
+        <p class="m-when">They want to pay by card but have no card on file. Fastest option — no card handling.</p>
+        <ol>
+          <li>Tap <b>QR</b>, then tap <b>Done</b>.</li>
+          <li>A QR code appears at the top of your screen. Hold your phone up.</li>
+          <li>They scan it and pay on <em>their</em> phone — Apple Pay, Google Pay, or card.</li>
+          <li>Once they've paid, tap the <b>×</b> to dismiss the code.</li>
+        </ol>
+        <div class="sees">Job shows <span class="pill wait">⏳ awaiting payment</span> until they actually pay, then flips to paid and their receipt sends itself.</div>
+      </div>
+    </div>
+
+    <div class="m alt">
+      <div class="m-num">4</div>
+      <div>
+        <div class="m-name">🔖 Tap in Stripe</div>
+        <p class="m-when">Backup — their physical card, tapped on your phone. Use when the QR won't work for them.</p>
+        <ol>
+          <li>Tap <b>Tap in Stripe</b> — it opens the Stripe app.</li>
+          <li><b>Type the amount in the Stripe app yourself</b>, then take the tap there.</li>
+          <li>Come back to Ops and tap <b>Done</b> to record it.</li>
+        </ol>
+        <div class="sees">This one doesn't link up on its own — the money lands in Stripe, and tapping Done here is what keeps the books straight. Badge turns <span class="pill good">🔖 tapped</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Someone flags you down</h2>
+  <div class="block">
+    <h3>+ New job here</h3>
+    <p>Button at the top of <b>Today</b>. Takes about twenty seconds.</p>
+    <ul>
+      <li>Enter the street, postal code, and how many bins.</li>
+      <li>Ask for their email if they'll give it — that's how they get their receipt and photos. Skip it if they'd rather not; cash still works fine.</li>
+      <li>Tap <b>Start job</b>. It appears in Today like any other stop — photos, Done, payment, all the same.</li>
+    </ul>
+  </div>
+
+  <h2>Watch for these</h2>
+  <div class="warn">
+    <div class="w red">
+      <b>Red "⚠ Nothing collected" after you tap Done</b>
+      <p>You finished the job but no money was taken — usually a walk-up with no card where Cash or QR wasn't picked. Go back and settle it before you drive off.</p>
+    </div>
+    <div class="w amber">
+      <b>They give up on the QR and pay cash instead</b>
+      <p>The QR link stays live for a while. Tell them not to scan it later, or they'll pay twice.</p>
+    </div>
+    <div class="w amber">
+      <b>Before photo, every time</b>
+      <p>Step 1 must go <b>green with a thumbnail</b> before you tap Done. No before photo means no leprechaun wash animation in their email — just a plain photo.</p>
+    </div>
+  </div>
+
+  <h2>Chasing money later</h2>
+  <div class="block">
+    <p>The <b>Needs attention</b> tab is your money to-do list. It shows every finished job that still owes, with the amount:</p>
+    <ul>
+      <li><span class="pill bad">⚠ card failed</span> — their saved card declined. Retry it there, or collect another way.</li>
+      <li><span class="pill wait">⏳ waiting on payment</span> — a QR they never scanned.</li>
+      <li><span class="pill bad">⚠ not collected</span> — the job was finished without taking anything.</li>
+    </ul>
+  </div>
+
+  <footer>
+    Lucky Shamrock Garbage Bin Cleaning · Ops at luckyshamrock.ca/ops · Questions: (587) 982-8887
+  </footer>
+</div>
+<p style="max-width:640px;margin:0 auto 40px;padding:0 20px">
+  <a href="/ops/" style="color:#1d7a3d;font-weight:700;text-decoration:none">← Back to the route</a>
+</p>
+</body>
+</html>

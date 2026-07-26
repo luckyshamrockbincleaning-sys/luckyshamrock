@@ -796,6 +796,15 @@ function OpsApp() {
         </button>
       </div>
 
+      <div style={{ textAlign: 'right', margin: '-4px 0 10px' }}>
+        <a
+          href="/ops/help.html"
+          style={{ fontSize: 13, color: 'var(--green, #1d7a3d)', fontWeight: 600, textDecoration: 'none' }}
+        >
+          How to take payment →
+        </a>
+      </div>
+
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
 
       {view === 'today' && <NewJobCard onCreated={load} />}
