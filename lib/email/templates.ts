@@ -236,6 +236,28 @@ export function doneTemplate(p: {
  * Refund receipt, triggered by the charge.refunded webhook (refunds are issued
  * from the Stripe dashboard/app, so this email is the customer's only signal).
  */
+/**
+ * Payment confirmation for a doorstep QR payment, sent when Stripe's
+ * checkout.session.completed lands. The done email goes out at Done time with
+ * no payment sentence (nobody had paid yet), so this is the customer's only
+ * confirmation — and it's what the post-payment page's "your receipt is on its
+ * way by email" promises.
+ */
+export function receiptTemplate(p: { name: string; amountCents: number }): RenderedEmail {
+  const subject = `Payment received — ${formatCad(p.amountCents)}`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `Thanks — we've received your payment of ${formatCad(p.amountCents)} for your garbage bin cleaning.\n\n` +
+    `Questions? Just reply to this email.\n\n` +
+    FOOTER_TEXT;
+  const html = brandWrap(
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>Thanks — we've received your payment of <strong>${formatCad(p.amountCents)}</strong> for your garbage bin cleaning.</p>` +
+    `<p style="color:#666">Questions? Just reply to this email.</p>`,
+  );
+  return { subject, html, text };
+}
+
 export function refundTemplate(p: { name: string; amountCents: number }): RenderedEmail {
   const subject = `Your ${formatCad(p.amountCents)} refund from Lucky Shamrock`;
   const text =

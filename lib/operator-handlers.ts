@@ -494,6 +494,13 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       binCount = sub?.binCount ?? binCount;
     }
     const baseCents = baseChargeCents(cadence, binCount);
+    // The operator's amount override (if entered in /ops) replaces the
+    // computed standard price for EVERY settlement method — the amount field
+    // is editable no matter which payment button is selected, not just the
+    // doorstep ones. Compute this once so all branches (and the receipt PDF
+    // below, which must show a line item that agrees with the total) use the
+    // same effective per-service amount.
+    const effectiveBaseCents = paymentParsed.data.amount_cents ?? baseCents;
     // Doorstep settlement: the operator collected in person. No Stripe call —
     // the money is already in hand (cash) or captured in the Stripe app
     // (terminal, reconciled there by amount/time).
@@ -501,10 +508,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // The visit completes now and the money confirms asynchronously via the
     // checkout.session.completed webhook.
     if (!alreadyBilled && paymentMethod === 'qr') {
-      const amount = finalChargeCents(
-        paymentParsed.data.amount_cents ?? baseCents,
-        discountCents,
-      );
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
       const session = await createDoorstepCheckoutSession({
         visitId,
         amountCents: amount,
@@ -532,10 +536,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         charge = { attempted: true, ok: true, amount_cents: amount };
       }
     } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
-      const amount = finalChargeCents(
-        paymentParsed.data.amount_cents ?? baseCents,
-        discountCents,
-      );
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
       const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
       await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
       await db.insert(payment).values({
@@ -549,7 +550,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       });
       charge = { attempted: true, ok: true, amount_cents: amount };
     } else if (!alreadyBilled && paymentMethod === 'card_on_file' && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
-      const amount = finalChargeCents(baseCents, discountCents);
+      // B3: the /ops amount field is editable for card_on_file too — an
+      // operator who types $30 and leaves the default payment method must
+      // charge $30, not the standard price.
+      const amount = finalChargeCents(effectiveBaseCents, discountCents);
 
       if (amount <= 0) {
         // Fully discounted → comp it, no Stripe call.
@@ -712,7 +716,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           address: `${row.street}, ${row.city} ${row.postalCode}`,
           planLabel,
           binCount,
-          baseCents,
+          // The effective (possibly operator-overridden) base, so the line
+          // item minus the discount always agrees with TOTAL PAID below.
+          baseCents: effectiveBaseCents,
           discountCents,
           totalCents: charge.amount_cents ?? 0,
           outcome:
@@ -769,6 +775,12 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       next_visit_date: nextVisitDate,
       skipped: result.skipped ?? false,
       charge,
+      // Explicit, unmistakable signal for /ops: nothing was collected on this
+      // tap (no card on file / Stripe unconfigured, and the operator didn't
+      // pick cash/terminal/qr). Done never blocks on this — it's a warning,
+      // not an error — but it must not be silently inferable-only from
+      // `charge.attempted` (easy to overlook client-side).
+      nothing_collected: !charge.attempted,
       payment_url: paymentUrl,
       payment_qr_svg: paymentQrSvg,
     });
@@ -861,11 +873,13 @@ export async function handleNote(req: VercelRequest, res: VercelResponse): Promi
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// GET /api/operator/attention  → visits whose charge FAILED (need a retry)
+// GET /api/operator/attention  → done visits whose payment still needs action
 //
-// A declined card never blocks "Done", so failed charges would otherwise vanish.
-// This is the operator's "money owed" surface: done visits still flagged
-// payment_status='failed', newest first, with contact + the amount + reason.
+// A declined card never blocks "Done", so failed charges would otherwise vanish
+// — and so would a QR nobody's scanned yet, or a walk-up where nothing was
+// collected at all (no card on file, operator forgot to tap Cash). This is the
+// operator's "money owed" surface: done visits with payment_status in
+// (failed, awaiting_payment, unpaid), newest first, with contact + amount + reason.
 // ─────────────────────────────────────────────────────────────────────
 export async function handleAttention(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'GET') {
@@ -895,7 +909,12 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
       .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'failed')))
-      .where(eq(visit.paymentStatus, 'failed'))
+      .where(
+        and(
+          eq(visit.status, 'done'),
+          inArray(visit.paymentStatus, ['failed', 'awaiting_payment', 'unpaid']),
+        ),
+      )
       .orderBy(desc(visit.doneAt), desc(payment.createdAt));
 
     // A visit can carry >1 failed payment row after retries — keep the newest per visit.

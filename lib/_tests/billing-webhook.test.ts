@@ -183,6 +183,38 @@ describe('applyStripeEvent', () => {
     expect(v!.paymentStatus).toBe('charged');
   });
 
+  it('checkout.session.completed sends exactly ONE receipt email, even when redelivered', async () => {
+    // B6: paid.html promises "your receipt is on its way by email" — this is
+    // that email. The done email sent at Done time already consumed the
+    // (visit_id, 'done') notification_log slot (QR renders no payment
+    // sentence there), so this uses a distinct 'receipt' kind.
+    const cid = await makeCustomer('cus_qr_receipt');
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_qr_receipt');
+    const db = getDb();
+    await db.update(payment).set({ status: 'pending', method: 'qr' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+
+    const event = {
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_receipt', payment_status: 'paid', metadata: { visit_id: visitId }, payment_intent: 'pi_qr_receipt' } },
+    };
+    const firstTag = await applyStripeEvent(event);
+    expect(firstTag).toBe('checkout.session.completed:applied');
+
+    // Stripe retries webhooks — a redelivered event must not double-email.
+    const secondTag = await applyStripeEvent(event);
+    expect(secondTag).toBe('checkout.session.completed:no_row');
+
+    const logs = await db.select().from(notificationLog).where(eq(notificationLog.customerId, cid));
+    const receipts = logs.filter((l) => l.kind === 'receipt');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.visitId).toBe(visitId);
+    // The done email's idempotency slot is untouched by this — proves the two
+    // sends use different notification_kind values, not the same one twice.
+    const doneLogs = logs.filter((l) => l.kind === 'done');
+    expect(doneLogs).toHaveLength(0);
+  });
+
   it('checkout.session.completed for an unknown visit is a safe no-op', async () => {
     const tag = await applyStripeEvent({
       type: 'checkout.session.completed',

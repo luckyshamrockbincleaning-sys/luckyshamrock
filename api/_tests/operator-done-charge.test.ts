@@ -16,6 +16,7 @@ const { getDb } = await import('../../db/client.js');
 const { customer, subscription, visit, payment } = await import('../../db/schema.js');
 const { signOperatorCookie, OPERATOR_COOKIE_NAME } = await import('../../lib/operator.js');
 const { eq } = await import('drizzle-orm');
+const receiptPdfModule = await import('../../lib/receipt-pdf.js');
 
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
@@ -94,6 +95,7 @@ describe('operator Done — auto-charge', () => {
     expect(res.statusCode).toBe(200);
     expect(mockCharge).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 3500, stripeCustomerId: 'cus_test', paymentMethodId: 'pm_test' }));
     expect(res.body.charge).toMatchObject({ attempted: true, ok: true, amount_cents: 3500 });
+    expect(res.body.nothing_collected).toBe(false);
 
     const db = getDb();
     const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
@@ -103,6 +105,32 @@ describe('operator Done — auto-charge', () => {
     expect(pays).toHaveLength(1);
     expect(pays[0]!.status).toBe('succeeded');
     expect(pays[0]!.amountCents).toBe(3500);
+  });
+
+  it('honours an operator amount override on card_on_file (not just doorstep methods), and keeps the receipt PDF line item + total in agreement', async () => {
+    // Regression test for B3: card_on_file used to ignore amount_cents and
+    // always charge the standard price ($35 here), even though the /ops
+    // amount field is editable for every payment method.
+    mockCharge.mockResolvedValueOnce({ ok: true, paymentIntentId: 'pi_override', status: 'succeeded' });
+    await seed({ withCard: true, cadence: 'monthly', binCount: 1 }); // standard price would be $35
+    const pdfSpy = vi.spyOn(receiptPdfModule, 'generateReceiptPdf');
+    const res = mockRes();
+    await handler(await req({ amount_cents: 3000, discount_cents: 500 }), res);
+
+    expect(res.statusCode).toBe(200);
+    // $30 override minus $5 discount = $25, NOT $35 - $5 = $30.
+    expect(mockCharge).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 2500 }));
+    expect(res.body.charge.amount_cents).toBe(2500);
+
+    expect(pdfSpy).toHaveBeenCalledTimes(1);
+    const pdfArgs = pdfSpy.mock.calls[0]![0];
+    expect(pdfArgs.baseCents).toBe(3000); // the override, not the $35 standard price
+    expect(pdfArgs.discountCents).toBe(500);
+    expect(pdfArgs.totalCents).toBe(2500);
+    // The line item minus the discount must always agree with TOTAL PAID.
+    expect(pdfArgs.baseCents - pdfArgs.discountCents).toBe(pdfArgs.totalCents);
+
+    pdfSpy.mockRestore();
   });
 
   it('charges extra bins at $12 each instead of full plan price', async () => {
@@ -149,12 +177,17 @@ describe('operator Done — auto-charge', () => {
     expect(pays[0]!.status).toBe('failed');
   });
 
-  it('does not charge when the customer has no card on file', async () => {
+  it('does not charge when the customer has no card on file, and flags nothing_collected so /ops can warn instead of losing the visit silently', async () => {
+    // B5(c): a walk-up with no saved card who defaults to card_on_file (the
+    // operator forgot to tap Cash) must never complete Done with a silent,
+    // untraceable non-payment — the response needs an unmistakable signal.
     const visitId = await seed({ withCard: false });
     const res = mockRes();
     await handler(await req(), res);
+    expect(res.statusCode).toBe(200); // Done never blocks on this
     expect(mockCharge).not.toHaveBeenCalled();
     expect(res.body.charge).toMatchObject({ attempted: false });
+    expect(res.body.nothing_collected).toBe(true);
     const db = getDb();
     const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
     expect(v!.status).toBe('done');

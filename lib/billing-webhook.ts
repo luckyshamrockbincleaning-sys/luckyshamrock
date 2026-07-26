@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
 import { sendAndLog } from './notifications.js';
-import { refundTemplate } from './email/templates.js';
+import { refundTemplate, receiptTemplate } from './email/templates.js';
 
 /**
  * Applies a verified Stripe event to our DB. Kept separate from the HTTP handler
@@ -155,6 +155,34 @@ export async function applyStripeEvent(event: {
       if (!p) return 'checkout.session.completed:no_row';
 
       await db.update(visit).set({ paymentStatus: 'charged' }).where(eq(visit.id, visitId));
+
+      // Tell the customer — the done email already went out at Done time with
+      // NO payment sentence (QR renders charge:{kind:'none'} there, since at
+      // that point nobody had paid). This confirmation, and paid.html's
+      // promise that "your receipt is on its way by email", is what fulfills
+      // that promise. Best-effort: an email failure must not make the webhook
+      // 500 (Stripe would retry the whole event). Uses the 'receipt' kind
+      // (not 'done') because 'done' already consumed the (visit_id, 'done')
+      // idempotency slot; sendAndLog's (visit_id, kind) idempotency on
+      // 'receipt' absorbs Stripe redeliveries of this event instead.
+      try {
+        const [c] = await db.select().from(customer).where(eq(customer.id, p.customerId));
+        if (c) {
+          const tpl = receiptTemplate({ name: c.name, amountCents: p.amountCents });
+          await sendAndLog({
+            kind: 'receipt',
+            to: c.email,
+            subject: tpl.subject,
+            body: tpl.text,
+            html: tpl.html,
+            customerId: c.id,
+            visitId: p.visitId,
+          });
+        }
+      } catch (err) {
+        console.error('[billing-webhook] receipt email failed (ledger already updated)', err);
+      }
+
       return 'checkout.session.completed:applied';
     }
 
