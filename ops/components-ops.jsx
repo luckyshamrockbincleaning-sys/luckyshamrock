@@ -74,10 +74,17 @@ function PasswordGate({ onAuthed }) {
   );
 }
 
+// Every payment_status the DB can hold needs an entry — a missing key renders
+// no badge at all, which silently hides unpaid work from the operator.
 const PAY_BADGE = {
   charged: { label: '💳 paid', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
   failed: { label: '⚠ card failed', color: '#7A2222', bg: '#F5DADA' },
   comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
+  paid_cash: { label: '💵 cash', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  paid_terminal: { label: '🔖 tapped', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  awaiting_payment: { label: '⏳ awaiting payment', color: '#7a5a12', bg: '#FBF0D5' },
+  unpaid: { label: '⚠ unpaid', color: '#7A2222', bg: '#F5DADA' },
+  refunded: { label: '↩ refunded', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
 };
 
 const BIN_LOCATION_LABEL = {
@@ -668,11 +675,17 @@ function OpsApp() {
         // Surface the charge outcome alongside the "done" confirmation.
         let chargeNote = '';
         const c = j.charge;
-        if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
+        // QR is the exception: charge.ok only means "Stripe session created",
+        // NOT that the customer has paid. Never tell the operator money
+        // arrived until the webhook confirms it.
+        if (opts.payment_method === 'qr') chargeNote = ' Awaiting payment — have them scan the code.';
+        else if (j.nothing_collected) chargeNote = ' ⚠ Nothing collected — no card on file. Settle with cash or QR.';
+        else if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
         else if (c?.attempted && c.ok && c.amount_cents === 0) chargeNote = ' Comped.';
         else if (c?.attempted && !c.ok) chargeNote = ' ⚠ Card declined — collect another way.';
         const next = j.next_visit_date ? `next clean ${formatDate(j.next_visit_date)}.` : 'no more scheduled cleans.';
-        setFlash({ kind: c?.attempted && !c.ok ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
+        const troubled = (c?.attempted && !c.ok) || j.nothing_collected;
+        setFlash({ kind: troubled ? 'err' : 'ok', text: `Done — ${next}${chargeNote}` });
         // Lifted out of StopCard: the visit is about to drop out of the
         // actionable list on reload below, which would unmount the card (and
         // the QR with it) before the operator could show the customer.
