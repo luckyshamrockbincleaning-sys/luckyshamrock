@@ -325,7 +325,10 @@ function StopCard({ stop, onAction, busy, showDate }) {
       ? { phase: 'ready', photo: saved.before.photo, filename: saved.before.filename, message: 'Photo restored.' }
       : { phase: 'idle', photo: null, filename: '', message: '' };
   });
-  const pay = PAY_BADGE[stop.payment_status];
+  // 'unpaid' is the default for every not-yet-serviced visit — showing it
+  // pre-completion would paint the whole route red before the operator has
+  // done anything. Only meaningful once the visit is done and still unpaid.
+  const pay = stop.payment_status === 'unpaid' && !isDone ? null : PAY_BADGE[stop.payment_status];
 
   async function doneWithDiscount() {
     if (!photoState.photo) {
@@ -559,8 +562,21 @@ function QrPanel({ qr, onDismiss }) {
   );
 }
 
+// Distinct badge per underlying payment_status — a QR nobody scanned yet and
+// a walk-up with no card at all are not "card failed" (see N2).
+const ATTENTION_BADGE = {
+  failed: { label: '⚠ card failed', color: '#7A2222', bg: '#F5DADA' },
+  awaiting_payment: { label: '⏳ waiting on payment', color: '#7a5a12', bg: '#FBF0D5' },
+  unpaid: { label: '⚠ not collected', color: '#7A2222', bg: '#F5DADA' },
+};
+
 function AttentionCard({ item, onAction, busy }) {
   const amt = item.amount_cents != null ? `$${(item.amount_cents / 100).toFixed(2)}` : '—';
+  const badge = ATTENTION_BADGE[item.payment_status] || ATTENTION_BADGE.unpaid;
+  // Retry only makes sense for a genuinely declined card that still has a
+  // card on file — a QR nobody scanned or a walk-up with nothing on file
+  // would just 409 (see N2).
+  const canRetry = item.payment_status === 'failed' && item.has_card;
   return (
     <div className="ops-card">
       <div className="ops-card-head">
@@ -569,7 +585,7 @@ function AttentionCard({ item, onAction, busy }) {
           <div className="ops-name">{item.customer.name}</div>
           <div className="ops-addr">{item.customer.street}, {item.customer.city} {item.customer.postal_code}</div>
         </div>
-        <span className="visit-status" style={{ background: '#F5DADA', color: '#7A2222' }}>⚠ card failed</span>
+        <span className="visit-status" style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
       <div className="ops-meta">
         <span>Owed {amt}</span>
@@ -577,9 +593,15 @@ function AttentionCard({ item, onAction, busy }) {
       </div>
       {item.failure_reason && <div className="ops-notes">{item.failure_reason}</div>}
       <div className="ops-actions">
-        <button className="btn btn-primary ops-btn" disabled={busy || !item.has_card} onClick={() => onAction('retry', item)}>
-          {item.has_card ? 'Retry charge' : 'No card on file'}
-        </button>
+        {canRetry ? (
+          <button className="btn btn-primary ops-btn" disabled={busy} onClick={() => onAction('retry', item)}>
+            Retry charge
+          </button>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+            {item.payment_status === 'awaiting_payment' ? 'Waiting on the customer to scan.' : 'Collect at the door.'}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -621,6 +643,13 @@ function OpsApp() {
   useEffect(() => {
     load(view);
   }, [load, view]);
+
+  // A stale QR panel must not follow the operator across tabs — clear it on
+  // every view change so switching away from (or back to) Today can't leave
+  // a previous customer's live payment link on screen (see N5).
+  useEffect(() => {
+    setQr(null);
+  }, [view]);
 
   async function onAction(action, stop, opts = {}) {
     setBusy(true);
@@ -677,8 +706,11 @@ function OpsApp() {
         const c = j.charge;
         // QR is the exception: charge.ok only means "Stripe session created",
         // NOT that the customer has paid. Never tell the operator money
-        // arrived until the webhook confirms it.
-        if (opts.payment_method === 'qr') chargeNote = ' Awaiting payment — have them scan the code.';
+        // arrived until the webhook confirms it. Guard on payment_url too —
+        // if Stripe hiccuped and createDoorstepCheckoutSession returned null,
+        // there's no code to scan, so fall through to nothing_collected
+        // instead of sending the operator to show a nonexistent QR.
+        if (opts.payment_method === 'qr' && j.payment_url) chargeNote = ' Awaiting payment — have them scan the code.';
         else if (j.nothing_collected) chargeNote = ' ⚠ Nothing collected — no card on file. Settle with cash or QR.';
         else if (c?.attempted && c.ok && c.amount_cents > 0) chargeNote = ` Charged $${(c.amount_cents / 100).toFixed(2)}.`;
         else if (c?.attempted && c.ok && c.amount_cents === 0) chargeNote = ' Comped.';
@@ -697,6 +729,11 @@ function OpsApp() {
             customerName: stop.customer_name,
             address: `${stop.street}, ${stop.city} ${stop.postal_code}`,
           });
+        } else {
+          // No code on this Done — clear any stale panel from a PREVIOUS
+          // customer's QR. Otherwise it stays pinned on screen and the next
+          // customer's scan could post against the wrong visit (see N5).
+          setQr(null);
         }
       } else if (action === 'skip') {
         setFlash({ kind: 'ok', text: `Skipped ${stop.customer_name}.` });
@@ -771,7 +808,7 @@ function OpsApp() {
         <div className="ops-card">
           <p className="muted">
             {view === 'today' ? 'No stops scheduled today.'
-              : view === 'attention' ? 'No failed charges — all paid up. 🍀'
+              : view === 'attention' ? 'Nothing needs attention — all paid up. 🍀'
               : 'Nothing booked after today.'}
           </p>
         </div>
