@@ -86,6 +86,16 @@ async function seedVisit(opts: {
       failureReason: opts.paymentStatus === 'failed' ? 'Your card was declined.' : null,
     });
   }
+  // A real awaiting_payment visit has a pending QR payment row — this is what
+  // handleAttention's join must resolve to surface the amount owed (see N2).
+  if (opts.paymentStatus === 'awaiting_payment') {
+    await db.insert(payment).values({
+      id: crypto.randomUUID(), customerId, visitId,
+      amountCents: opts.amountCents ?? 3500, discountCents: 0,
+      status: 'pending',
+      method: 'qr',
+    });
+  }
   return visitId;
 }
 
@@ -116,10 +126,20 @@ describe('operator — needs-attention (payment still needs action)', () => {
     expect(ids).toEqual([awaitingId, failedId, unpaidId].sort());
 
     const failedEntry = res.body.visits.find((v: any) => v.id === failedId);
-    expect(failedEntry).toMatchObject({ amount_cents: 3500, customer: expect.objectContaining({ name: 'Pat' }) });
+    expect(failedEntry).toMatchObject({
+      payment_status: 'failed',
+      amount_cents: 3500,
+      customer: expect.objectContaining({ name: 'Pat' }),
+    });
     expect(failedEntry.failure_reason).toMatch(/declined/i);
 
+    // N2: payment_status must ride along so /ops can pick the right badge —
+    // and the amount must resolve for a pending QR row, not just a failed one.
+    const awaitingEntry = res.body.visits.find((v: any) => v.id === awaitingId);
+    expect(awaitingEntry).toMatchObject({ payment_status: 'awaiting_payment', amount_cents: 3500 });
+
     const unpaidEntry = res.body.visits.find((v: any) => v.id === unpaidId);
+    expect(unpaidEntry.payment_status).toBe('unpaid');
     expect(unpaidEntry.has_card).toBe(false);
   });
 });

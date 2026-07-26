@@ -34,6 +34,7 @@ import { baseChargeCents, finalChargeCents } from './pricing.js';
 import { formatFriendlyDate } from './dates.js';
 import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
+import { isPlaceholderEmail } from './walkup-email.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -68,11 +69,6 @@ const newJobSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   city: z.string().trim().min(1).max(120).optional(),
 });
-
-/** Walk-up customers who gave no email get a placeholder — never mail those. */
-export function isPlaceholderEmail(email: string): boolean {
-  return /^walkup\+[0-9a-f]{8}@luckyshamrock\.ca$/i.test(email);
-}
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -897,6 +893,7 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
         id: visit.id,
         scheduledFor: visit.scheduledFor,
         doneAt: visit.doneAt,
+        paymentStatus: visit.paymentStatus,
         amountCents: payment.amountCents,
         failureReason: payment.failureReason,
         name: customer.name,
@@ -908,7 +905,12 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
-      .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'failed')))
+      // Widened from `status='failed'` only — an awaiting_payment visit's
+      // real payment row is still `pending` (QR not yet confirmed by the
+      // webhook), and that row is what carries the amount owed. Without
+      // 'pending' here the join never matches for those rows and the UI
+      // shows "Owed —" for every QR-in-flight visit (see N2).
+      .leftJoin(payment, and(eq(payment.visitId, visit.id), inArray(payment.status, ['failed', 'pending'])))
       .where(
         and(
           eq(visit.status, 'done'),
@@ -926,6 +928,10 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
       visits.push({
         id: r.id,
         scheduled_for: r.scheduledFor,
+        // /ops needs this to pick the right badge/label and to decide whether
+        // Retry is even offered — without it every row rendered as "card
+        // failed" regardless of the real state (see N2).
+        payment_status: r.paymentStatus,
         amount_cents: r.amountCents ?? null,
         failure_reason: r.failureReason ?? null,
         has_card: Boolean(r.hasCard),
