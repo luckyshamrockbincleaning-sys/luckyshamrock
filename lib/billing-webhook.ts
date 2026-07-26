@@ -3,6 +3,7 @@ import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
 import { sendAndLog } from './notifications.js';
 import { refundTemplate, receiptTemplate } from './email/templates.js';
+import { isPlaceholderEmail } from './walkup-email.js';
 
 /**
  * Applies a verified Stripe event to our DB. Kept separate from the HTTP handler
@@ -167,7 +168,11 @@ export async function applyStripeEvent(event: {
       // 'receipt' absorbs Stripe redeliveries of this event instead.
       try {
         const [c] = await db.select().from(customer).where(eq(customer.id, p.customerId));
-        if (c) {
+        // Walk-up customers who declined to give an email get a minted
+        // walkup+<8hex>@luckyshamrock.ca placeholder — mail to it bounces
+        // against our own domain. handleDone/handleNotify already skip these;
+        // this send path must honor the same invariant (see N3).
+        if (c && !isPlaceholderEmail(c.email)) {
           const tpl = receiptTemplate({ name: c.name, amountCents: p.amountCents });
           await sendAndLog({
             kind: 'receipt',

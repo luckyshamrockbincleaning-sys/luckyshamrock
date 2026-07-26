@@ -215,6 +215,44 @@ describe('applyStripeEvent', () => {
     expect(doneLogs).toHaveLength(0);
   });
 
+  it('checkout.session.completed settles a walk-up QR payment but sends no receipt to the placeholder email', async () => {
+    // N3: the canonical doorstep flow — a stranger flags the truck down,
+    // declines to give an email, pays by QR. handleNewJob mints them a
+    // walkup+<8hex>@luckyshamrock.ca placeholder so the NOT NULL/UNIQUE
+    // constraints hold; mail to it bounces against our own domain. The ledger
+    // must still update — only the email send is skipped.
+    const cid = crypto.randomUUID();
+    const placeholderEmail = `walkup+${cid.slice(0, 8)}@luckyshamrock.ca`;
+    await getDb().insert(customer).values({
+      id: cid,
+      email: placeholderEmail,
+      name: 'Walk-up customer',
+      street: 'Curb',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L1A1',
+      pickupDay: 'wednesday',
+    });
+    const { visitId, paymentId } = await makeVisitWithPayment(cid, 'pi_qr_walkup');
+    const db = getDb();
+    await db.update(payment).set({ status: 'pending', method: 'qr' }).where(eq(payment.id, paymentId));
+    await db.update(visit).set({ paymentStatus: 'awaiting_payment' }).where(eq(visit.id, visitId));
+
+    const tag = await applyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_walkup', payment_status: 'paid', metadata: { visit_id: visitId }, payment_intent: 'pi_qr_walkup' } },
+    });
+
+    // Ledger updates regardless — the guard is on the email send only.
+    expect(tag).toBe('checkout.session.completed:applied');
+    const [p] = await db.select().from(payment).where(eq(payment.id, paymentId));
+    const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+    expect(p!.status).toBe('succeeded');
+    expect(v!.paymentStatus).toBe('charged');
+
+    const logs = await db.select().from(notificationLog).where(eq(notificationLog.customerId, cid));
+    expect(logs.filter((l) => l.kind === 'receipt')).toHaveLength(0);
+  });
+
   it('checkout.session.completed for an unknown visit is a safe no-op', async () => {
     const tag = await applyStripeEvent({
       type: 'checkout.session.completed',
