@@ -7,6 +7,7 @@ import { signOperatorCookie, OPERATOR_COOKIE_NAME } from '../../lib/operator.js'
 import { and, eq } from 'drizzle-orm';
 import * as templates from '../../lib/email/templates.js';
 import * as billing from '../../lib/billing.js';
+import sharp from 'sharp';
 
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
@@ -225,6 +226,140 @@ describe('POST /api/operator/visit/:id/done', () => {
     const db = getDb();
     const [v] = await db.select().from(visit).where(eq(visit.id, v1));
     expect(v!.status).toBe('done');
+  });
+
+  describe('multi-bin photos (photos[] array)', () => {
+    function fakeAttachment(seed: string, mime = 'image/jpeg') {
+      return { filename: `${seed}.jpg`, mime_type: mime, content_base64: Buffer.from(seed).toString('base64') };
+    }
+
+    it('accepts a photos[] array covering multiple bins and completes the visit', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [
+          { before: fakeAttachment('bin1-before'), after: fakeAttachment('bin1-after') },
+          { before: fakeAttachment('bin2-before'), after: fakeAttachment('bin2-after') },
+        ],
+      }), res);
+
+      expect(res.statusCode).toBe(200);
+      const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+      expect(v!.status).toBe('done');
+    });
+
+    it('passes bin 2+ as extraBins to the email template, distinct from the bin-1 hero pair', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const spy = vi.spyOn(templates, 'doneTemplate');
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [
+          { before: fakeAttachment('bin1-before'), after: fakeAttachment('bin1-after') },
+          { after: fakeAttachment('bin2-after') }, // no before photo for bin 2
+          { before: fakeAttachment('bin3-before'), after: fakeAttachment('bin3-after') },
+        ],
+      }), res);
+
+      expect(res.statusCode).toBe(200);
+      // Fake (non-image) bytes can't decode in sharp, so GIF generation fails
+      // and bin 1 falls back to the plain before/after layout — same as any
+      // other single-bin Done with unparseable image bytes (see the mime/size
+      // tests above). What this test actually pins down is that bins 2+ are
+      // reported separately from bin 1, not folded into hasPhoto/hasBeforePhoto.
+      expect(spy.mock.calls[0]![0].hasPhoto).toBe(true);
+      expect(spy.mock.calls[0]![0].hasBeforePhoto).toBe(true);
+      expect(spy.mock.calls[0]![0].extraBins).toEqual([
+        { hasBefore: false, hasAfter: true },
+        { hasBefore: true, hasAfter: true },
+      ]);
+      spy.mockRestore();
+    });
+
+    it('generates the wash GIF from bin 1 only; bin 2 rides along as a plain photo pair', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+      const fakePhoto = (color: { r: number; g: number; b: number }) =>
+        sharp({ create: { width: 320, height: 340, channels: 3, background: color } }).jpeg().toBuffer();
+
+      const spy = vi.spyOn(templates, 'doneTemplate');
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [
+          {
+            before: { filename: 'b1-before.jpg', mime_type: 'image/jpeg', content_base64: (await fakePhoto({ r: 90, g: 80, b: 60 })).toString('base64') },
+            after: { filename: 'b1-after.jpg', mime_type: 'image/jpeg', content_base64: (await fakePhoto({ r: 40, g: 120, b: 70 })).toString('base64') },
+          },
+          { before: fakeAttachment('bin2-before'), after: fakeAttachment('bin2-after') },
+        ],
+      }), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(spy.mock.calls[0]![0].hasWashGif).toBe(true);
+      // Bin 2 never gets a GIF, even though bin 1's real photos succeeded.
+      expect(spy.mock.calls[0]![0].extraBins).toEqual([{ hasBefore: true, hasAfter: true }]);
+      spy.mockRestore();
+    }, 30_000);
+
+    it('returns 400 for an invalid photo inside the photos[] array and does not mark done', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [
+          { before: fakeAttachment('bin1-before'), after: fakeAttachment('bin1-after') },
+          { after: fakeAttachment('bin2-after', 'image/gif') },
+        ],
+      }), res);
+
+      expect(res.statusCode).toBe(400);
+      expect((res.body as any).message).toContain('photos[1].after');
+      const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+      expect(v!.status).toBe('scheduled');
+    });
+
+    it('returns 400 for an empty photos[] array', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', { photos: [] }), res);
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for more than 3 bins', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [1, 2, 3, 4].map((n) => ({ after: fakeAttachment(`bin${n}-after`) })),
+      }), res);
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('ignores legacy before_photo/clean_photo when photos[] is also present', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const spy = vi.spyOn(templates, 'doneTemplate');
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: [{ before: fakeAttachment('array-before'), after: fakeAttachment('array-after') }],
+        before_photo: fakeAttachment('legacy-before'),
+        clean_photo: fakeAttachment('legacy-after'),
+      }), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(spy.mock.calls[0]![0].extraBins).toEqual([]);
+      spy.mockRestore();
+    });
   });
 
   it('returns next_visit_date null when there is no later scheduled visit', async () => {

@@ -7,6 +7,8 @@ import {
   DONE_BEFORE_PHOTO_CID,
   DONE_AFTER_PHOTO_CID,
   DONE_WASH_GIF_CID,
+  binBeforePhotoCid,
+  binAfterPhotoCid,
 } from '../email/templates.js';
 
 describe('bookingConfirmedTemplate', () => {
@@ -123,6 +125,67 @@ describe('doneTemplate', () => {
     expect(before_only.html).not.toContain('cid:');
     const none = doneTemplate({ name: 'Sam', nextVisitDate: null });
     expect(none.html).not.toContain('cid:');
+  });
+
+  it('renders bin 2+ as plain before/after cards under the bin-1 hero section', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      hasPhoto: true,
+      hasBeforePhoto: true,
+      hasWashGif: true,
+      extraBins: [{ hasBefore: true, hasAfter: true }],
+    });
+    // Bin 1's story stays the GIF-only layout — no bin-1 cid regression.
+    expect(t.html).toContain(`cid:${DONE_WASH_GIF_CID}`);
+    expect(t.html).not.toContain(`cid:${DONE_BEFORE_PHOTO_CID}`);
+    // Bin 2 gets its own before/after cids, and never a GIF cid of its own
+    // (there is only ever one wash-animation cid, generated for bin 1 only).
+    expect(t.html).toContain(`cid:${binBeforePhotoCid(2)}`);
+    expect(t.html).toContain(`cid:${binAfterPhotoCid(2)}`);
+    expect(t.html).toMatch(/Bin 2/);
+  });
+
+  it('renders bin 2 after-only (no before) as a single photo, matching the bin-1 anti-testimonial rule', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      hasPhoto: true,
+      extraBins: [{ hasBefore: false, hasAfter: true }],
+    });
+    expect(t.html).toContain(`cid:${binAfterPhotoCid(2)}`);
+    expect(t.html).not.toContain(`cid:${binBeforePhotoCid(2)}`);
+  });
+
+  it('omits a bin entirely when it has no after photo, even with a before photo (no anti-testimonial)', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      hasPhoto: true,
+      extraBins: [{ hasBefore: true, hasAfter: false }],
+    });
+    expect(t.html).not.toContain(`cid:${binBeforePhotoCid(2)}`);
+    expect(t.html).not.toContain(`cid:${binAfterPhotoCid(2)}`);
+  });
+
+  it('numbers multiple extra bins starting at 2 and mentions the total bin count in the summary line', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      hasPhoto: true,
+      extraBins: [
+        { hasBefore: true, hasAfter: true },
+        { hasBefore: true, hasAfter: true },
+      ],
+    });
+    expect(t.html).toContain(`cid:${binBeforePhotoCid(2)}`);
+    expect(t.html).toContain(`cid:${binBeforePhotoCid(3)}`);
+    expect(t.text).toContain('all 3 bins');
+  });
+
+  it('defaults to no extra bins when the field is omitted', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, hasPhoto: true });
+    expect(t.html).not.toContain(`cid:${binAfterPhotoCid(2)}`);
   });
 
   it('acts as a receipt: states the charged amount', () => {

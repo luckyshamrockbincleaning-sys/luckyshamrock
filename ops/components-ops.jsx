@@ -155,10 +155,12 @@ function savedPhotos(visitId) {
   } catch (e) { return null; }
 }
 
-function persistPhoto(visitId, kind, photo, filename) {
+// One entry per bin: bins[i] = { before: {photo,filename}?, after: {photo,filename}? }.
+function persistBinPhoto(visitId, binIndex, kind, photo, filename) {
   try {
-    const cur = savedPhotos(visitId) || { ts: Date.now() };
-    cur[kind] = { photo, filename };
+    const cur = savedPhotos(visitId) || { ts: Date.now(), bins: [] };
+    if (!Array.isArray(cur.bins)) cur.bins = [];
+    cur.bins[binIndex] = { ...cur.bins[binIndex], [kind]: { photo, filename } };
     cur.ts = Date.now();
     localStorage.setItem(PHOTO_STORE_PREFIX + visitId, JSON.stringify(cur));
   } catch (e) { /* storage full/blocked — degrade silently */ }
@@ -212,7 +214,6 @@ function PhotoStep({ n, title, hint, state, onChange, busy }) {
         <input
           type="file"
           accept="image/*"
-          capture="environment"
           disabled={busy}
           onChange={onChange}
           style={{ width: '100%', minWidth: 0 }}
@@ -309,46 +310,67 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const isCancelled = stop.status === 'cancelled';
   const isSkipped = stop.status === 'skipped';
   const heading = stop.status === 'heading_there';
-  const bins = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
+  const binCount = stop.bin_count || 1;
+  const binsLabel = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
   const [discount, setDiscount] = useState('');
   const [payMethod, setPayMethod] = useState('card_on_file');
   const [amountOverride, setAmountOverride] = useState('');
-  const [photoState, setPhotoState] = useState(() => {
+  // One before/after pair per bin. bin 0 is the "hero" pair — it's the one
+  // the server turns into the wash-GIF animation; bins 1+ always ride along
+  // as plain before/after photos (see lib/operator-handlers.ts).
+  const idlePhoto = () => ({ phase: 'idle', photo: null, filename: '', message: '' });
+  const [bins, setBins] = useState(() => {
     const saved = savedPhotos(stop.id);
-    return saved?.clean
-      ? { phase: 'ready', photo: saved.clean.photo, filename: saved.clean.filename, message: 'Photo restored.' }
-      : { phase: 'idle', photo: null, filename: '', message: '' };
-  });
-  const [beforeState, setBeforeState] = useState(() => {
-    const saved = savedPhotos(stop.id);
-    return saved?.before
-      ? { phase: 'ready', photo: saved.before.photo, filename: saved.before.filename, message: 'Photo restored.' }
-      : { phase: 'idle', photo: null, filename: '', message: '' };
+    const restore = (entry) =>
+      entry ? { phase: 'ready', photo: entry.photo, filename: entry.filename, message: 'Photo restored.' } : idlePhoto();
+    return Array.from({ length: binCount }, (_, i) => ({
+      before: restore(saved?.bins?.[i]?.before),
+      after: restore(saved?.bins?.[i]?.after),
+    }));
   });
   // 'unpaid' is the default for every not-yet-serviced visit — showing it
   // pre-completion would paint the whole route red before the operator has
   // done anything. Only meaningful once the visit is done and still unpaid.
   const pay = stop.payment_status === 'unpaid' && !isDone ? null : PAY_BADGE[stop.payment_status];
 
+  function setBinPhoto(binIndex, kind, next) {
+    setBins((prev) => {
+      const updated = prev.slice();
+      updated[binIndex] = { ...updated[binIndex], [kind]: next };
+      return updated;
+    });
+  }
+
   async function doneWithDiscount() {
-    if (!photoState.photo) {
-      setPhotoState((s) => ({ ...s, phase: 'error', message: 'Take a clean-bin photo before tapping Done.' }));
+    const missingAfter = bins.findIndex((b) => !b.after.photo);
+    if (missingAfter !== -1) {
+      setBinPhoto(missingAfter, 'after', {
+        ...bins[missingAfter].after,
+        phase: 'error',
+        message: binCount > 1 ? `Take Bin ${missingAfter + 1}'s after photo before tapping Done.` : 'Take a clean-bin photo before tapping Done.',
+      });
       return;
     }
-    // No before photo means no wash animation in the customer's email — that
-    // is sometimes intentional, but never let it happen silently.
-    if (!beforeState.photo) {
+    // No before photo means no wash animation (bin 1) or no proof shot (other
+    // bins) in the customer's email — that is sometimes intentional, but
+    // never let it happen silently.
+    if (bins.some((b) => !b.before.photo)) {
       const proceed = window.confirm(
-        'No BEFORE photo (Step 1) — the customer will NOT get the leprechaun wash animation, just the plain after photo.\n\nTap Cancel to add the before photo, or OK to finish without it.',
+        binCount > 1
+          ? "One or more bins is missing a BEFORE photo — the customer's email will show only that bin's after photo, and bin 1 loses the wash animation if it's the one missing.\n\nTap Cancel to add the missing photo(s), or OK to finish without them."
+          : 'No BEFORE photo (Step 1) — the customer will NOT get the leprechaun wash animation, just the plain after photo.\n\nTap Cancel to add the before photo, or OK to finish without it.',
       );
       if (!proceed) return;
     }
     const dollars = parseFloat(discount);
     const discount_cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-    const payload = { discount_cents, clean_photo: photoState.photo, payment_method: payMethod };
+    const payload = {
+      discount_cents,
+      payment_method: payMethod,
+      photos: bins.map((b) => ({ before: b.before.photo || undefined, after: b.after.photo })),
+    };
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
-    if (beforeState.photo) payload.before_photo = beforeState.photo;
     const result = await onAction('done', stop, payload);
     // onAction swallows errors and returns undefined on failure (and on a 401),
     // so a falsy result means the Done did NOT go through — keep the persisted
@@ -360,34 +382,17 @@ function StopCard({ stop, onAction, busy, showDate }) {
     // now-done visit, so state kept on THIS component would vanish with it.
   }
 
-  async function onPhotoChange(e) {
+  async function onBinPhotoChange(binIndex, kind, e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setPhotoState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
+    setBinPhoto(binIndex, kind, { phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
     try {
-      const photo = await prepareCleanPhoto(file);
-      persistPhoto(stop.id, 'clean', photo, file.name);
-      setPhotoState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
+      const filename = kind === 'before' ? 'before-bin.jpg' : 'clean-bin.jpg';
+      const photo = await prepareCleanPhoto(file, filename);
+      persistBinPhoto(stop.id, binIndex, kind, photo, file.name);
+      setBinPhoto(binIndex, kind, { phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
     } catch (err) {
-      setPhotoState({
-        phase: 'error',
-        photo: null,
-        filename: file.name,
-        message: err.message || 'Could not prepare photo.',
-      });
-    }
-  }
-
-  async function onBeforePhotoChange(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    setBeforeState({ phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
-    try {
-      const photo = await prepareCleanPhoto(file, 'before-bin.jpg');
-      persistPhoto(stop.id, 'before', photo, file.name);
-      setBeforeState({ phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
-    } catch (err) {
-      setBeforeState({
+      setBinPhoto(binIndex, kind, {
         phase: 'error',
         photo: null,
         filename: file.name,
@@ -413,34 +418,37 @@ function StopCard({ stop, onAction, busy, showDate }) {
       </div>
 
       <div className="ops-meta">
-        <span>{bins}</span>
+        <span>{binsLabel}</span>
         {stop.bin_location && <span>📍 {BIN_LOCATION_LABEL[stop.bin_location] || stop.bin_location}</span>}
         {stop.phone && <a className="ops-phone" href={`tel:${stop.phone}`}>{stop.phone}</a>}
       </div>
 
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
 
-      {!isDone && !isCancelled && (
-        <PhotoStep
-          n={1}
-          title="Before photo"
-          hint="Snap the dirty bin when you arrive — this is what makes the wash animation."
-          state={beforeState}
-          onChange={onBeforePhotoChange}
-          busy={busy}
-        />
-      )}
-
-      {!isDone && !isCancelled && (
-        <PhotoStep
-          n={2}
-          title="After photo"
-          hint="Snap the clean bin. Required to finish."
-          state={photoState}
-          onChange={onPhotoChange}
-          busy={busy}
-        />
-      )}
+      {!isDone && !isCancelled && bins.map((bin, i) => (
+        <React.Fragment key={i}>
+          <PhotoStep
+            n={i * 2 + 1}
+            title={binCount > 1 ? `Bin ${i + 1} — Before photo` : 'Before photo'}
+            hint={
+              i === 0
+                ? 'Snap the dirty bin when you arrive — this is what makes the wash animation.'
+                : `Snap this bin dirty, before you clean it.`
+            }
+            state={bin.before}
+            onChange={(e) => onBinPhotoChange(i, 'before', e)}
+            busy={busy}
+          />
+          <PhotoStep
+            n={i * 2 + 2}
+            title={binCount > 1 ? `Bin ${i + 1} — After photo` : 'After photo'}
+            hint={i === 0 ? 'Snap the clean bin. Required to finish.' : 'Snap this bin clean. Required to finish.'}
+            state={bin.after}
+            onChange={(e) => onBinPhotoChange(i, 'after', e)}
+            busy={busy}
+          />
+        </React.Fragment>
+      ))}
 
       {!isDone && !isCancelled && (
         <div className="ops-pay" style={{ marginTop: 12 }}>
@@ -522,7 +530,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || photoState.phase === 'loading' || beforeState.phase === 'loading' || !photoState.photo}
+            disabled={busy || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
             onClick={doneWithDiscount}
           >
             Done
@@ -669,14 +677,14 @@ function OpsApp() {
       if (action === 'done' && opts.discount_cents > 0) {
         body.discount_cents = opts.discount_cents;
       }
-      // These photo fields must be forwarded explicitly. The server combines
-      // before + after photos to generate the leprechaun wash animation GIF in
-      // the done email. Omitting either one silently disables the animation.
-      if (action === 'done' && opts.before_photo) {
-        body.before_photo = opts.before_photo;
-      }
-      if (action === 'done' && opts.clean_photo) {
-        body.clean_photo = opts.clean_photo;
+      // This field must be forwarded explicitly — it's the exact allow-list
+      // that silently dropped before_photo in the past (2026-07-25 P0: the
+      // before photo never left the browser because it wasn't in this list).
+      // One entry per bin; the server combines bin 0's before+after into the
+      // leprechaun wash animation GIF, so a missing bin-0 photo silently
+      // disables the animation for that Done.
+      if (action === 'done' && opts.photos) {
+        body.photos = opts.photos;
       }
       if (action === 'done' && opts.payment_method) {
         body.payment_method = opts.payment_method;

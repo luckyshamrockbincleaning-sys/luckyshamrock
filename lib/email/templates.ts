@@ -53,6 +53,19 @@ export const DONE_BEFORE_PHOTO_CID = 'before-photo';
 export const DONE_AFTER_PHOTO_CID = 'after-photo';
 export const DONE_WASH_GIF_CID = 'wash-animation';
 
+/**
+ * Multi-bin visits (bin 2+) get their own before/after Content-IDs — the wash
+ * GIF is only ever generated from bin 1 (see operator-handlers.ts), so every
+ * additional bin renders as a plain before/after photo pair. `n` is the
+ * 1-indexed bin number (2, 3, ...), never 1 — bin 1 uses the constants above.
+ */
+export function binBeforePhotoCid(n: number): string {
+  return `bin-${n}-before-photo`;
+}
+export function binAfterPhotoCid(n: number): string {
+  return `bin-${n}-after-photo`;
+}
+
 export function bookingConfirmedTemplate(p: {
   name: string;
   firstVisitDate: string;
@@ -117,6 +130,13 @@ export function doneTemplate(p: {
    */
   hasWashGif?: boolean;
   /**
+   * Bins beyond the first (bin 1 is covered by hasPhoto/hasBeforePhoto/
+   * hasWashGif above). Each entry is bin N (N = index + 2). Same
+   * anti-testimonial rule as bin 1: a bin with `hasBefore` but not `hasAfter`
+   * renders nothing for that bin.
+   */
+  extraBins?: Array<{ hasBefore: boolean; hasAfter: boolean }>;
+  /**
    * Base URL for the tap-a-star rating links (…/api/rate?v=…&t=…). The
    * template appends &stars=1..5. When set, the star row REPLACES the plain
    * review link — 4-5 star taps forward to the Google review anyway.
@@ -142,12 +162,14 @@ export function doneTemplate(p: {
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
   const showBeforeAfter = !!p.hasPhoto && !!p.hasBeforePhoto;
   const showWashGif = !!p.hasWashGif && !!p.hasPhoto;
+  const shownExtraBins = (p.extraBins ?? []).filter((b) => b.hasAfter);
+  const multiBinSuffix = shownExtraBins.length ? ` (all ${shownExtraBins.length + 1} bins)` : '';
   const photoText = showWashGif
-    ? `\n\nYour before-and-after wash animation is attached.`
+    ? `\n\nYour before-and-after wash animation is attached.${multiBinSuffix}`
     : showBeforeAfter
-      ? `\n\nBefore-and-after photos of your bin are attached.`
+      ? `\n\nBefore-and-after photos of your bin are attached.${multiBinSuffix}`
       : p.hasPhoto
-        ? `\n\nPhoto proof is attached.`
+        ? `\n\nPhoto proof is attached.${multiBinSuffix}`
         : '';
   // Inline styles + table layout: the only combination that renders
   // consistently across Gmail, Apple Mail, and Outlook.
@@ -173,6 +195,24 @@ export function doneTemplate(p: {
         `<tr><td><img src="cid:${DONE_AFTER_PHOTO_CID}" alt="Your clean bin" style="width:100%;max-width:340px;border-radius:10px;display:block"></td></tr>` +
         `</table>`
       : '';
+  // Bin 1 is covered above (photoHtml, possibly as the wash GIF). Bins 2+
+  // never get a GIF — always a plain before/after (or after-only) card.
+  const extraBinsHtml = shownExtraBins
+    .map((bin, i) => {
+      const n = i + 2;
+      const beforeRows = bin.hasBefore
+        ? `<tr><td style="${photoLabelStyle};color:#8a6d3b;padding-top:16px">Bin ${n} — Before</td></tr>` +
+          `<tr><td><img src="cid:${binBeforePhotoCid(n)}" alt="Bin ${n} before cleaning" style="${photoImgStyle}"></td></tr>` +
+          `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:12px">Bin ${n} — After ✨</td></tr>`
+        : `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:16px">Bin ${n} ✨</td></tr>`;
+      return (
+        `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:0 auto">` +
+        beforeRows +
+        `<tr><td><img src="cid:${binAfterPhotoCid(n)}" alt="Bin ${n} after cleaning" style="${photoImgStyle}"></td></tr>` +
+        `</table>`
+      );
+    })
+    .join('');
   let chargeLine = '';
   if (p.charge?.kind === 'charged' && typeof p.charge.amountCents === 'number') {
     chargeLine = `Your card on file was charged ${formatCad(p.charge.amountCents)}.`;
@@ -226,6 +266,7 @@ export function doneTemplate(p: {
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
     chargeHtml +
     photoHtml +
+    extraBinsHtml +
     starsHtml +
     reviewHtml,
   );

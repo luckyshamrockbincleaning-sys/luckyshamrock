@@ -170,19 +170,31 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   `COALESCE(visit.bin_count, subscription.bin_count)` so both render correctly.
 - **Operator skip ≠ customer skip:** operator skip just marks the visit `skipped`
   (no replacement). Customer skip (`/api/visit/:id/skip`) inserts a replacement.
-- **Operator Done requires photo proof in the UI.** `/ops` compresses the selected
-  clean-bin photo to JPEG and sends it in `POST /api/operator/act` as
-  `clean_photo`; an OPTIONAL `before_photo` (snapped at arrival, same
-  validation) rides along. V1 does **not** store photos durably — email only.
-  Backend accepts no-photo Done for API compatibility but validates any
-  supplied photo (JPEG/PNG/WebP, max 5 MB each).
+- **Operator Done requires photo proof in the UI, one before/after pair per bin.**
+  `/ops` compresses each selected photo to JPEG and sends `POST /api/operator/act`
+  `{op:'done', photos: [{before?, after}, ...]}` — one entry per `stop.bin_count`
+  (max 3, matching the booking/walk-up bin_count ceiling), `after` required by the
+  UI, `before` optional. Legacy single-bin callers may still send
+  `before_photo`/`clean_photo` instead; `handleDone`'s `parsePhotoPairs` falls back
+  to that shape as a single-entry array when `photos` is absent (`photos` always
+  wins if both are present — don't rely on sending both). V1 does **not** store
+  photos durably — email only. Backend accepts a no-after-photo bin for API
+  compatibility but validates any supplied photo (JPEG/PNG/WebP, max 5 MB each).
+- **The wash GIF is generated from bin 1 ONLY.** `generateWashGif` (sharp +
+  gifenc) takes ~13s per pair — stacking one per bin would risk the 30s
+  `maxDuration` on a 2-3 bin visit. Bins 2+ always render as plain before/after
+  (or after-only) photo pairs, never a GIF, via `extraBins` on `doneTemplate` and
+  the `binBeforePhotoCid(n)`/`binAfterPhotoCid(n)` helpers in
+  `lib/email/templates.ts` (n = bin number, starting at 2 — bin 1 uses the
+  original `DONE_*_PHOTO_CID` constants).
 - **Done-email photos render INLINE, not as paperclip attachments.** The
   handler marks them `inline: true` with Content-IDs from
-  `lib/email/templates.ts` (`DONE_BEFORE_PHOTO_CID`/`DONE_AFTER_PHOTO_CID`);
+  `lib/email/templates.ts` (`DONE_BEFORE_PHOTO_CID`/`DONE_AFTER_PHOTO_CID` for
+  bin 1, `binBeforePhotoCid`/`binAfterPhotoCid` for bin 2+);
   `buildRfc822Message` wraps inline images in `multipart/related` and the
   template references them as `<img src="cid:...">`. Both photos → side-by-side
   Before/After table card; after only → single inline "Sparkling clean" image;
-  a `before_photo` without a `clean_photo` is accepted but ignored (no
+  a before photo without an after photo is accepted but ignored per bin (no
   anti-testimonial emails). Email HTML must stay table-based with inline
   styles — Gmail/Outlook strip everything else.
 - **notify/done are double-tap-safe** for free via `sendAndLog`'s `(visit_id, kind)`

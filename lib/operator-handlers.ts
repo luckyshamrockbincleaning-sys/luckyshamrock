@@ -23,7 +23,15 @@ import {
 } from './operator.js';
 import { normalizePostalCode } from './postal.js';
 import { sendAndLog } from './notifications.js';
-import { onOurWayTemplate, doneTemplate, DONE_BEFORE_PHOTO_CID, DONE_AFTER_PHOTO_CID, DONE_WASH_GIF_CID } from './email/templates.js';
+import {
+  onOurWayTemplate,
+  doneTemplate,
+  DONE_BEFORE_PHOTO_CID,
+  DONE_AFTER_PHOTO_CID,
+  DONE_WASH_GIF_CID,
+  binBeforePhotoCid,
+  binAfterPhotoCid,
+} from './email/templates.js';
 import { generateWashGif } from './wash-gif.js';
 import { LEPRECHAUN_SPRITES } from './leprechaun-sprites.js';
 import { generateReceiptPdf } from './receipt-pdf.js';
@@ -96,7 +104,7 @@ function isActionableVisitStatus(status: string): boolean {
 
 function parsePhotoAttachment(
   input: unknown,
-  field: 'clean_photo' | 'before_photo',
+  field: string,
 ): { ok: true; attachment: EmailAttachment | null } | { ok: false; message: string } {
   if (input === undefined || input === null) return { ok: true, attachment: null };
   const parsed = cleanPhotoSchema.safeParse(input);
@@ -116,7 +124,7 @@ function parsePhotoAttachment(
     return { ok: false, message: `${field} must be 5 MB or smaller` };
   }
 
-  const fallbackFilename = field === 'before_photo' ? `before-bin.${ext}` : `clean-bin.${ext}`;
+  const fallbackFilename = field.includes('before') ? `before-bin.${ext}` : `clean-bin.${ext}`;
   return {
     ok: true,
     attachment: {
@@ -125,6 +133,43 @@ function parsePhotoAttachment(
       contentBase64: base64,
     },
   };
+}
+
+interface PhotoPair {
+  before: EmailAttachment | null;
+  after: EmailAttachment | null;
+}
+
+const MAX_PHOTO_PAIRS = 3; // matches the bin_count ceiling (booking + walk-up job forms)
+
+/**
+ * A visit's Done photos, one pair per bin. Preferred shape is
+ * `photos: [{before?, after?}, ...]`. Falls back to the legacy single-bin
+ * `before_photo`/`clean_photo` fields so older /ops clients (and every
+ * existing single-bin test) keep working unchanged. `photos`, when present,
+ * always wins — a caller sending both is almost certainly a bug, not an
+ * intentional mix.
+ */
+function parsePhotoPairs(body: any): { ok: true; pairs: PhotoPair[] } | { ok: false; message: string } {
+  if (Array.isArray(body?.photos)) {
+    if (body.photos.length === 0) return { ok: false, message: 'photos must not be empty' };
+    if (body.photos.length > MAX_PHOTO_PAIRS) return { ok: false, message: `photos supports at most ${MAX_PHOTO_PAIRS} bins` };
+    const pairs: PhotoPair[] = [];
+    for (let i = 0; i < body.photos.length; i++) {
+      const entry = body.photos[i];
+      const before = parsePhotoAttachment(entry?.before, `photos[${i}].before`);
+      if (!before.ok) return before;
+      const after = parsePhotoAttachment(entry?.after, `photos[${i}].after`);
+      if (!after.ok) return after;
+      pairs.push({ before: before.attachment, after: after.attachment });
+    }
+    return { ok: true, pairs };
+  }
+  const cleanPhoto = parsePhotoAttachment(body?.clean_photo, 'clean_photo');
+  if (!cleanPhoto.ok) return cleanPhoto;
+  const beforePhoto = parsePhotoAttachment(body?.before_photo, 'before_photo');
+  if (!beforePhoto.ok) return beforePhoto;
+  return { ok: true, pairs: [{ before: beforePhoto.attachment, after: cleanPhoto.attachment }] };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -395,16 +440,12 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     return;
   }
   const paymentMethod = paymentParsed.data.payment_method;
-  const cleanPhoto = parsePhotoAttachment(req.body?.clean_photo, 'clean_photo');
-  if (!cleanPhoto.ok) {
-    res.status(400).json({ status: 'invalid', message: cleanPhoto.message });
+  const photoPairs = parsePhotoPairs(req.body);
+  if (!photoPairs.ok) {
+    res.status(400).json({ status: 'invalid', message: photoPairs.message });
     return;
   }
-  const beforePhoto = parsePhotoAttachment(req.body?.before_photo, 'before_photo');
-  if (!beforePhoto.ok) {
-    res.status(400).json({ status: 'invalid', message: beforePhoto.message });
-    return;
-  }
+  const pairs = photoPairs.pairs;
 
   try {
     const db = getDb();
@@ -634,6 +675,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // carries ONLY the GIF; the separate before/after photos are the
     // fallback. Strictly best-effort — any failure degrades to the photo
     // layout, never blocks Done (the charge has already happened above).
+    // Multi-bin visits: the GIF is generated from bin 1 ONLY — sharp+gifenc
+    // takes ~13s per pair, and this handler already runs close to the 30s
+    // Vercel maxDuration with just one. Stacking N sequential GIFs would risk
+    // timing out on a 3-bin visit, so bins 2+ always render as plain
+    // before/after photo pairs (see extraBins below), never a GIF.
     // Ground-truth telemetry: exactly what photos reached the server on this
     // Done. Lets us tell "operator skipped the before photo" apart from "GIF
     // generation failed" without guessing from the customer's inbox.
@@ -641,13 +687,17 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       '[operator/visit/done] photos',
       JSON.stringify({
         visitId,
-        before: beforePhoto.attachment ? Math.round(beforePhoto.attachment.contentBase64.length * 0.75) : 0,
-        clean: cleanPhoto.attachment ? Math.round(cleanPhoto.attachment.contentBase64.length * 0.75) : 0,
+        bins: pairs.length,
+        sizes: pairs.map((p) => ({
+          before: p.before ? Math.round(p.before.contentBase64.length * 0.75) : 0,
+          after: p.after ? Math.round(p.after.contentBase64.length * 0.75) : 0,
+        })),
       }),
     );
     const photoAttachments: EmailAttachment[] = [];
     let hasWashGif = false;
-    if (cleanPhoto.attachment && beforePhoto.attachment) {
+    const heroPair = pairs[0];
+    if (heroPair?.after && heroPair?.before) {
       const gifStart = Date.now();
       try {
         const stampTime = (d: Date) =>
@@ -660,8 +710,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
             minute: '2-digit',
           }).format(d);
         const gif = await generateWashGif({
-          beforeJpeg: Buffer.from(beforePhoto.attachment.contentBase64, 'base64'),
-          afterJpeg: Buffer.from(cleanPhoto.attachment.contentBase64, 'base64'),
+          beforeJpeg: Buffer.from(heroPair.before.contentBase64, 'base64'),
+          afterJpeg: Buffer.from(heroPair.after.contentBase64, 'base64'),
           sprites: LEPRECHAUN_SPRITES,
           stamps: {
             // Before ≈ arrival ("on my way" tap); after = the Done tap.
@@ -682,12 +732,24 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         console.error(`[operator/visit/done] wash gif failed after ${Date.now() - gifStart}ms (email falls back to photos)`, err);
       }
     }
-    if (!hasWashGif && cleanPhoto.attachment) {
-      if (beforePhoto.attachment) {
-        photoAttachments.push({ ...beforePhoto.attachment, inline: true, contentId: DONE_BEFORE_PHOTO_CID });
+    if (!hasWashGif && heroPair?.after) {
+      if (heroPair.before) {
+        photoAttachments.push({ ...heroPair.before, inline: true, contentId: DONE_BEFORE_PHOTO_CID });
       }
-      photoAttachments.push({ ...cleanPhoto.attachment, inline: true, contentId: DONE_AFTER_PHOTO_CID });
+      photoAttachments.push({ ...heroPair.after, inline: true, contentId: DONE_AFTER_PHOTO_CID });
     }
+    // Bins 2+ never get a GIF — always plain before/after (or after-only),
+    // same anti-testimonial rule as bin 1 (no "before" without an "after").
+    const extraBins = pairs.slice(1).map((pair, i) => {
+      const n = i + 2;
+      if (pair.after) {
+        if (pair.before) {
+          photoAttachments.push({ ...pair.before, inline: true, contentId: binBeforePhotoCid(n) });
+        }
+        photoAttachments.push({ ...pair.after, inline: true, contentId: binAfterPhotoCid(n) });
+      }
+      return { hasBefore: !!pair.before, hasAfter: !!pair.after };
+    });
     // PDF receipt whenever money changed hands (or was explicitly comped) on
     // THIS tap. Regular attachment (paperclip), not inline. Best-effort. QR is
     // excluded here: the customer hasn't actually paid yet at this point —
@@ -747,9 +809,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       name: row.name,
       nextVisitDate: nextVisitDate ? formatFriendlyDate(nextVisitDate) : null,
       reviewUrl: process.env.REVIEW_URL || null,
-      hasPhoto: !!cleanPhoto.attachment,
-      hasBeforePhoto: !!cleanPhoto.attachment && !!beforePhoto.attachment,
+      hasPhoto: !!heroPair?.after,
+      hasBeforePhoto: !!heroPair?.after && !!heroPair?.before,
       hasWashGif,
+      extraBins,
       ratingBaseUrl,
       charge: emailCharge,
     });
