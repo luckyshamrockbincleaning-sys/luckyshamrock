@@ -253,6 +253,18 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   (consistent with "Booking write atomicity"). A missing email becomes
   `walkup+<8hex>@luckyshamrock.ca` so the NOT NULL/UNIQUE constraints hold;
   those addresses receive no customer email.
+- **Walk-up jobs take an optional `scheduled_for` (`YYYY-MM-DD`)** for the
+  "come back in two weeks" deal made at the door; omitted = today
+  (`operatorTodayISO()`), which stays the common case. The response echoes
+  `scheduled_for` so /ops can tell the operator a future job landed under
+  "All upcoming" rather than today's route. Validation rejects a **past** date
+  and anything **more than a year out** — both would create a visit that never
+  appears in `today` (exact match) or `upcoming` (forward-only), i.e. invisible
+  work. **Sundays ARE allowed here**, unlike the customer-facing booking form:
+  this endpoint already trusts the operator over the system (same reason it
+  skips the service-area gate), so the day is their call. The `parseDateOnlyUtcNoon`
+  helper is duplicated from `lib/validation.ts` rather than imported — keep them
+  in sync if either changes.
 - **Charge on Done is crash-safe + race-safe.** `handleDone` atomically CLAIMS
   the visit (`UPDATE ... WHERE id=? AND status IN (actionable) RETURNING`) so two
   concurrent Done taps can't both charge — the loser gets 409, not a duplicate

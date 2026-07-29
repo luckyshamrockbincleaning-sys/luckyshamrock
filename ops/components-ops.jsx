@@ -11,6 +11,22 @@ function formatDate(iso) {
   return d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+// Local calendar day, not UTC — the operator's phone runs on Mountain Time and
+// a UTC "today" flips mid-evening (same reason the server uses operatorTodayISO).
+function toISODate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function todayISO() {
+  return toISODate(new Date());
+}
+
+function isoPlusDays(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number);
+  // Day-of-month overflow rolls the month/year over correctly.
+  return toISODate(new Date(y, m - 1, d + days));
+}
+
 function Flash({ kind, text, onDismiss }) {
   if (!text) return null;
   return (
@@ -231,10 +247,14 @@ function PhotoStep({ n, title, hint, state, onChange, busy }) {
 // Walk-up job: someone flags the truck down. Deliberately minimal — street,
 // bins, and an optional email are all that's needed to start cleaning.
 function NewJobCard({ onCreated }) {
+  const emptyForm = { street: '', postal_code: '', bin_count: 1, email: '', name: '', scheduled_for: '' };
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+  const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const today = todayISO();
+  // Blank = today. Anything else is a "come back later" deal made at the door.
+  const isFuture = !!form.scheduled_for && form.scheduled_for > today;
 
   async function submit() {
     if (busy) return;
@@ -252,6 +272,7 @@ function NewJobCard({ onCreated }) {
       };
       if (form.email.trim()) body.email = form.email.trim();
       if (form.name.trim()) body.name = form.name.trim();
+      if (form.scheduled_for) body.scheduled_for = form.scheduled_for;
       const r = await fetch('/api/operator/job', {
         method: 'POST',
         credentials: 'same-origin',
@@ -263,11 +284,14 @@ function NewJobCard({ onCreated }) {
           throw new Error('Session expired — sign in again to create jobs.');
         }
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.message || j.status || `${r.status}`);
+        // Field errors (e.g. a bad date) come back as {errors:{field:[msg]}}.
+        const fieldErr = j.errors && Object.values(j.errors).flat()[0];
+        throw new Error(fieldErr || j.message || j.status || `${r.status}`);
       }
-      setForm({ street: '', postal_code: '', bin_count: 1, email: '', name: '' });
+      const created = await r.json().catch(() => ({}));
+      setForm(emptyForm);
       setOpen(false);
-      onCreated();
+      onCreated(created);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -284,6 +308,12 @@ function NewJobCard({ onCreated }) {
   }
 
   const field = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  const chip = (active) => ({
+    padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+    border: active ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
+    background: active ? 'var(--green-soft, #eef6ef)' : '#fff',
+    fontWeight: active ? 600 : 400,
+  });
   return (
     <div className="ops-card" style={{ marginBottom: 12 }}>
       <h2 style={{ marginTop: 0, fontSize: 17 }}>New job at this address</h2>
@@ -297,8 +327,42 @@ function NewJobCard({ onCreated }) {
       </select>
       <input style={field} placeholder="Email (optional — for receipt)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
       <input style={field} placeholder="Name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+
+      <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+        When?
+      </label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+        {[
+          ['', 'Today'],
+          [isoPlusDays(today, 7), 'In 1 week'],
+          [isoPlusDays(today, 14), 'In 2 weeks'],
+        ].map(([value, label]) => (
+          <button
+            key={label}
+            type="button"
+            disabled={busy}
+            onClick={() => setForm({ ...form, scheduled_for: value })}
+            style={chip(form.scheduled_for === value)}
+          >{label}</button>
+        ))}
+      </div>
+      <input
+        style={field}
+        type="date"
+        min={today}
+        value={form.scheduled_for}
+        onChange={(e) => setForm({ ...form, scheduled_for: e.target.value })}
+      />
+      {isFuture && (
+        <div style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)', marginTop: -2, marginBottom: 8 }}>
+          Booked for {formatDate(form.scheduled_for)} — it'll show under <strong>All upcoming</strong>, not today's route.
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn btn-go ops-btn" disabled={busy} onClick={submit}>{busy ? 'Creating…' : 'Start job'}</button>
+        <button className="btn btn-go ops-btn" disabled={busy} onClick={submit}>
+          {busy ? 'Saving…' : isFuture ? 'Book job' : 'Start job'}
+        </button>
         <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
       </div>
     </div>
@@ -815,7 +879,22 @@ function OpsApp() {
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
 
-      {view === 'today' && <NewJobCard onCreated={load} />}
+      {view === 'today' && (
+        <NewJobCard
+          onCreated={(created) => {
+            // A future-dated job lands in "All upcoming", so it will NOT appear
+            // in the list that reloads under this card — say so explicitly
+            // rather than letting the operator wonder if it saved.
+            const when = created?.scheduled_for;
+            setFlash(
+              when && when > todayISO()
+                ? { kind: 'ok', text: `Job booked for ${formatDate(when)} — find it under “All upcoming.”` }
+                : { kind: 'ok', text: 'Job created — it’s on today’s route.' },
+            );
+            load(view);
+          }}
+        />
+      )}
 
       <QrPanel qr={qr} onDismiss={() => setQr(null)} />
 

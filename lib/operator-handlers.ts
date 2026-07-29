@@ -69,14 +69,53 @@ const donePaymentSchema = z.object({
   // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
   amount_cents: z.number().int().min(0).max(100_000).optional(),
 });
-const newJobSchema = z.object({
-  street: z.string().trim().min(1).max(200),
-  postal_code: z.string().trim().min(1).max(10),
-  bin_count: z.number().int().min(1).max(3).default(1),
-  email: z.string().trim().toLowerCase().email().optional(),
-  name: z.string().trim().min(1).max(120).optional(),
-  city: z.string().trim().min(1).max(120).optional(),
-});
+const newJobSchema = z
+  .object({
+    street: z.string().trim().min(1).max(200),
+    postal_code: z.string().trim().min(1).max(10),
+    bin_count: z.number().int().min(1).max(3).default(1),
+    email: z.string().trim().toLowerCase().email().optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+    city: z.string().trim().min(1).max(120).optional(),
+    // "Come back in two weeks" deals struck at the door. Omitted = today,
+    // which stays the common walk-up case.
+    scheduled_for: z.string().regex(DATE_RE, 'scheduled_for must be YYYY-MM-DD').optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.scheduled_for) return;
+    if (!parseDateOnlyUtcNoon(data.scheduled_for)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'scheduled_for must be a real calendar date',
+        path: ['scheduled_for'],
+      });
+      return;
+    }
+    // A visit dated before today would never surface again: `today` only
+    // matches the current date and `upcoming` only looks forward, so a
+    // fat-fingered past date silently creates work nobody can see.
+    const today = operatorTodayISO();
+    if (data.scheduled_for < today) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'scheduled_for cannot be in the past',
+        path: ['scheduled_for'],
+      });
+    }
+    // Same reasoning in the other direction — a typo'd year (2036) would
+    // park the job a decade out where nobody would ever look for it.
+    if (data.scheduled_for > isoPlusDays(today, 365)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'scheduled_for cannot be more than a year out',
+        path: ['scheduled_for'],
+      });
+    }
+    // NB: Sundays are deliberately allowed here, unlike the customer-facing
+    // booking form. This endpoint already trusts the operator over the system
+    // (it skips the service-area gate too) — they're standing at the bin
+    // making the deal, so the day is their call.
+  });
 
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
@@ -100,6 +139,30 @@ const stopColumns = {
 
 function isActionableVisitStatus(status: string): boolean {
   return ACTIONABLE_VISIT_STATUSES.includes(status as 'scheduled' | 'heading_there');
+}
+
+/**
+ * Parse a YYYY-MM-DD string at UTC noon, rejecting non-dates that still match
+ * the regex (2026-02-31). Noon keeps the calendar day stable either side of a
+ * Mountain-Time offset. Mirrors the same helper in lib/validation.ts.
+ */
+function parseDateOnlyUtcNoon(value: string): Date | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+    return null;
+  }
+  return d;
+}
+
+function isoPlusDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function parsePhotoAttachment(
@@ -295,6 +358,9 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     return;
   }
   const data = parsed.data;
+  // Default to today — the overwhelmingly common walk-up case (operator is
+  // at the bin right now); an explicit date is the "come back in two weeks" deal.
+  const scheduledForISO = data.scheduled_for ?? operatorTodayISO();
 
   try {
     const db = getDb();
@@ -329,12 +395,12 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
         customerId,
         subscriptionId: null,
         binCount: data.bin_count,
-        scheduledFor: new Date(`${operatorTodayISO()}T12:00:00Z`),
+        scheduledFor: new Date(`${scheduledForISO}T12:00:00Z`),
         status: 'scheduled',
       });
     });
 
-    res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId });
+    res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId, scheduled_for: scheduledForISO });
   } catch (err) {
     console.error('[operator/job] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });

@@ -188,4 +188,105 @@ describe('POST /api/operator/job (walk-up)', () => {
     const logs = await db.select().from(notificationLog);
     expect(logs.filter((l) => l.kind === 'on_our_way')).toHaveLength(0);
   });
+
+  describe('optional scheduled_for ("come back in two weeks")', () => {
+    // Mirrors operatorTodayISO() — Edmonton-local, which is what the handler
+    // defaults to and validates against.
+    function edmontonTodayISO(): string {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Edmonton',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    }
+    function isoPlusDays(iso: string, days: number): string {
+      const d = new Date(`${iso}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+
+    it('defaults to today when scheduled_for is omitted', async () => {
+      const res = mockRes();
+      await handler(await req(true, validJob), res);
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.scheduled_for).toBe(edmontonTodayISO());
+      const db = getDb();
+      const [v] = await db.select().from(visit).where(eq(visit.id, res.body.visit_id));
+      expect(v!.scheduledFor.toISOString().slice(0, 10)).toBe(edmontonTodayISO());
+    });
+
+    it('schedules the visit on an explicit future date', async () => {
+      const target = isoPlusDays(edmontonTodayISO(), 14);
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: target }), res);
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.scheduled_for).toBe(target);
+      const db = getDb();
+      const [v] = await db.select().from(visit).where(eq(visit.id, res.body.visit_id));
+      expect(v!.scheduledFor.toISOString().slice(0, 10)).toBe(target);
+      expect(v!.status).toBe('scheduled');
+    });
+
+    it('accepts today explicitly', async () => {
+      const today = edmontonTodayISO();
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: today }), res);
+      expect(res.statusCode).toBe(201);
+      expect(res.body.scheduled_for).toBe(today);
+    });
+
+    it('rejects a past date and creates nothing', async () => {
+      const past = isoPlusDays(edmontonTodayISO(), -1);
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: past }), res);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.errors.scheduled_for.join(' ')).toMatch(/past/);
+      const db = getDb();
+      expect(await db.select().from(visit)).toHaveLength(0);
+      expect(await db.select().from(customer)).toHaveLength(0);
+    });
+
+    it('rejects a date more than a year out (guards a typo’d year)', async () => {
+      const farOut = isoPlusDays(edmontonTodayISO(), 400);
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: farOut }), res);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.errors.scheduled_for.join(' ')).toMatch(/year/);
+      expect(await getDb().select().from(visit)).toHaveLength(0);
+    });
+
+    it('rejects a malformed date', async () => {
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: '14th of never' }), res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body.errors.scheduled_for).toBeDefined();
+    });
+
+    it('rejects a regex-valid but non-existent calendar date', async () => {
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: '2026-02-31' }), res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body.errors.scheduled_for.join(' ')).toMatch(/real calendar date/);
+    });
+
+    it('allows a Sunday, unlike the customer-facing booking form', async () => {
+      // The operator is standing at the bin making the deal — this endpoint
+      // already trusts them over the system (it skips the service-area gate).
+      let candidate = isoPlusDays(edmontonTodayISO(), 1);
+      for (let i = 0; i < 7 && new Date(`${candidate}T12:00:00Z`).getUTCDay() !== 0; i++) {
+        candidate = isoPlusDays(candidate, 1);
+      }
+      expect(new Date(`${candidate}T12:00:00Z`).getUTCDay()).toBe(0);
+
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: candidate }), res);
+      expect(res.statusCode).toBe(201);
+      expect(res.body.scheduled_for).toBe(candidate);
+    });
+  });
 });
