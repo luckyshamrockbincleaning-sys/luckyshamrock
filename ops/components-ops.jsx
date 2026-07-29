@@ -886,11 +886,17 @@ function OpsApp() {
             // in the list that reloads under this card — say so explicitly
             // rather than letting the operator wonder if it saved.
             const when = created?.scheduled_for;
-            setFlash(
-              when && when > todayISO()
-                ? { kind: 'ok', text: `Job booked for ${formatDate(when)} — find it under “All upcoming.”` }
-                : { kind: 'ok', text: 'Job created — it’s on today’s route.' },
-            );
+            if (when && when > todayISO()) {
+              // Say plainly whether the customer got written confirmation —
+              // if not (no email given, or the send failed), the operator
+              // should tell them the date out loud before driving off.
+              const mailed = created.confirmation_sent
+                ? ' Confirmation emailed.'
+                : ' ⚠ No confirmation email sent — tell them the date.';
+              setFlash({ kind: 'ok', text: `Job booked for ${formatDate(when)} — find it under “All upcoming.”${mailed}` });
+            } else {
+              setFlash({ kind: 'ok', text: 'Job created — it’s on today’s route.' });
+            }
             load(view);
           }}
         />

@@ -12,7 +12,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
 import { and, eq, gt, inArray, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
-import { customer, subscription, visit, payment } from '../db/schema.js';
+import { customer, subscription, visit, payment, magicLinkToken } from '../db/schema.js';
 import {
   getOperatorSession,
   signOperatorCookie,
@@ -26,6 +26,7 @@ import { sendAndLog } from './notifications.js';
 import {
   onOurWayTemplate,
   doneTemplate,
+  bookingConfirmedTemplate,
   DONE_BEFORE_PHOTO_CID,
   DONE_AFTER_PHOTO_CID,
   DONE_WASH_GIF_CID,
@@ -43,6 +44,7 @@ import { formatFriendlyDate } from './dates.js';
 import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
+import { generateMagicLinkToken, hashToken } from './tokens.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -375,6 +377,16 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     const customerId = existing?.id ?? crypto.randomUUID();
     const isNewCustomer = !existing;
 
+    // Confirm a FUTURE booking by email, but only when the walk-up actually
+    // gave us an address. Same-day jobs deliberately get nothing here — the
+    // operator is standing at the bin and the `done` email (photos + receipt)
+    // follows within the hour, so a "you're booked" note would be pure noise.
+    // A date days out is the opposite: without this the customer has no
+    // written proof the job exists.
+    const name = data.name ?? 'Walk-up customer';
+    const shouldConfirm = scheduledForISO > operatorTodayISO() && !isPlaceholderEmail(email);
+    const tokenPlain = shouldConfirm ? generateMagicLinkToken() : null;
+
     // Customer insert (if new) + visit insert in one transaction — a mid-flight
     // failure must not leave an orphan customer with zero visits behind.
     await db.transaction(async (tx) => {
@@ -382,7 +394,7 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
         await tx.insert(customer).values({
           id: customerId,
           email,
-          name: data.name ?? 'Walk-up customer',
+          name,
           street: data.street,
           city: data.city ?? 'Fort Saskatchewan',
           postalCode: normalizePostalCode(data.postal_code),
@@ -398,9 +410,55 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
         scheduledFor: new Date(`${scheduledForISO}T12:00:00Z`),
         status: 'scheduled',
       });
+
+      if (tokenPlain) {
+        await tx.insert(magicLinkToken).values({
+          token: hashToken(tokenPlain),
+          customerId,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        });
+      }
     });
 
-    res.status(201).json({ status: 'ok', visit_id: visitId, customer_id: customerId, scheduled_for: scheduledForISO });
+    // Best-effort, and AFTER the transaction: the job is already saved, so a
+    // mail failure must never 500 the operator standing at the door (they'd
+    // likely re-tap and create a duplicate job). Idempotent on (visit, kind)
+    // via sendAndLog. Awaited rather than detached — Vercel freezes the lambda
+    // on response, which silently dropped a `void promise` send once before.
+    let confirmationSent = false;
+    if (tokenPlain) {
+      try {
+        const siteUrl = process.env.SITE_URL ?? 'https://www.luckyshamrock.ca';
+        const tpl = bookingConfirmedTemplate({
+          name,
+          firstVisitDate: formatFriendlyDate(scheduledForISO),
+          manageUrl: `${siteUrl}/api/magic-link/verify?token=${encodeURIComponent(tokenPlain)}`,
+        });
+        const sent = await sendAndLog({
+          kind: 'booking_confirmed',
+          to: email,
+          subject: tpl.subject,
+          body: tpl.text,
+          html: tpl.html,
+          customerId,
+          visitId,
+        });
+        // `ok` is the actual send result and `skipped` means a prior row
+        // already covered it — only a genuine fresh send counts, so /ops
+        // never tells the operator an email went out when Gmail rejected it.
+        confirmationSent = sent.ok && !sent.skipped;
+      } catch (err) {
+        console.error('[operator/job] confirmation email failed (job unaffected)', err);
+      }
+    }
+
+    res.status(201).json({
+      status: 'ok',
+      visit_id: visitId,
+      customer_id: customerId,
+      scheduled_for: scheduledForISO,
+      confirmation_sent: confirmationSent,
+    });
   } catch (err) {
     console.error('[operator/job] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { handleNewJob as handler, handleDone as doneHandler, handleNotify as notifyHandler } from '../../lib/operator-handlers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, visit, notificationLog } from '../../db/schema.js';
+import { customer, visit, notificationLog, magicLinkToken } from '../../db/schema.js';
 import { signOperatorCookie, OPERATOR_COOKIE_NAME } from '../../lib/operator.js';
 import { eq } from 'drizzle-orm';
 
@@ -272,6 +272,54 @@ describe('POST /api/operator/job (walk-up)', () => {
       await handler(await req(true, { ...validJob, scheduled_for: '2026-02-31' }), res);
       expect(res.statusCode).toBe(400);
       expect(res.body.errors.scheduled_for.join(' ')).toMatch(/real calendar date/);
+    });
+
+    it('emails a booking confirmation for a future-dated job when a real email was given', async () => {
+      const target = isoPlusDays(edmontonTodayISO(), 14);
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: target }), res);
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.confirmation_sent).toBe(true);
+      const db = getDb();
+      const logs = await db
+        .select()
+        .from(notificationLog)
+        .where(eq(notificationLog.visitId, res.body.visit_id));
+      const confirmations = logs.filter((l) => l.kind === 'booking_confirmed');
+      expect(confirmations).toHaveLength(1);
+      expect(confirmations[0]!.sentAt).not.toBeNull();
+      expect(confirmations[0]!.failedAt).toBeNull();
+      // The email carries a manage link, so a magic-link token must exist.
+      const [c] = await db.select().from(customer).where(eq(customer.email, 'walkup@example.com'));
+      expect(confirmations[0]!.customerId).toBe(c!.id);
+      const tokens = await db.select().from(magicLinkToken).where(eq(magicLinkToken.customerId, c!.id));
+      expect(tokens).toHaveLength(1);
+    });
+
+    it('sends NO confirmation for a same-day job (operator is standing right there)', async () => {
+      const res = mockRes();
+      await handler(await req(true, { ...validJob, scheduled_for: edmontonTodayISO() }), res);
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.confirmation_sent).toBe(false);
+      const logs = await getDb().select().from(notificationLog);
+      expect(logs.filter((l) => l.kind === 'booking_confirmed')).toHaveLength(0);
+      // No manage link is minted when nothing is emailed.
+      expect(await getDb().select().from(magicLinkToken)).toHaveLength(0);
+    });
+
+    it('sends NO confirmation for a future job booked without an email (placeholder address)', async () => {
+      const target = isoPlusDays(edmontonTodayISO(), 14);
+      const { email: _drop, ...noEmail } = validJob;
+      const res = mockRes();
+      await handler(await req(true, { ...noEmail, scheduled_for: target }), res);
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.confirmation_sent).toBe(false);
+      const logs = await getDb().select().from(notificationLog);
+      expect(logs.filter((l) => l.kind === 'booking_confirmed')).toHaveLength(0);
+      expect(await getDb().select().from(magicLinkToken)).toHaveLength(0);
     });
 
     it('allows a Sunday, unlike the customer-facing booking form', async () => {

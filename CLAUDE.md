@@ -265,6 +265,18 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   skips the service-area gate), so the day is their call. The `parseDateOnlyUtcNoon`
   helper is duplicated from `lib/validation.ts` rather than imported — keep them
   in sync if either changes.
+- **A FUTURE-dated walk-up with a real email gets a `booking_confirmed` email**
+  (same template + 1-hour manage link as a web booking; the magic-link token is
+  only minted when we're actually sending). **Same-day walk-ups deliberately get
+  nothing** — the operator is at the bin and the `done` email with photos and
+  receipt follows within the hour, so a "you're booked" note would be noise.
+  Placeholder `walkup+…` addresses never receive it. The send is best-effort and
+  **after** the transaction: the job is already saved, so a mail failure must not
+  500 an operator at the door (they'd re-tap and duplicate the job). It's awaited,
+  not detached — Vercel freezes the lambda on response, which silently dropped a
+  `void promise` send once before (see the 2026-06-10 magic-link P0). The response
+  returns `confirmation_sent` (true only on a genuine fresh send: `ok && !skipped`)
+  so /ops can warn the operator to say the date out loud when no email went out.
 - **Charge on Done is crash-safe + race-safe.** `handleDone` atomically CLAIMS
   the visit (`UPDATE ... WHERE id=? AND status IN (actionable) RETURNING`) so two
   concurrent Done taps can't both charge — the loser gets 409, not a duplicate
