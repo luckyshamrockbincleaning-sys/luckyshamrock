@@ -20,6 +20,12 @@ export interface ReceiptInput {
   binCount: number;
   baseCents: number;
   discountCents: number;
+  /**
+   * Referral/goodwill credit consumed by this clean. Rendered as its own line
+   * so base − discount − credit visibly equals the total paid; without it the
+   * receipt's arithmetic would not add up.
+   */
+  creditCents?: number;
   totalCents: number;
   /** How this clean was settled — drives the line under the total. */
   outcome: 'charged' | 'comped' | 'cash' | 'terminal';
@@ -76,6 +82,9 @@ export async function generateReceiptPdf(r: ReceiptInput): Promise<Buffer> {
   };
   const binLabel = r.binCount === 1 ? '1 bin' : `${r.binCount} bins`;
   line(`${r.planLabel} — garbage bin cleaning (${binLabel})`, cad(r.baseCents));
+  if ((r.creditCents ?? 0) > 0) {
+    line('Referral credit', `-${cad(r.creditCents ?? 0)}`);
+  }
   if (r.discountCents > 0) {
     line('Discount', `-${cad(r.discountCents)}`);
   }

@@ -45,6 +45,7 @@ import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
+import { spendCredit } from './referral.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -662,6 +663,15 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // below, which must show a line item that agrees with the total) use the
     // same effective per-service amount.
     const effectiveBaseCents = paymentParsed.data.amount_cents ?? baseCents;
+    // Referral/goodwill credit applies AFTER the operator's discount and before
+    // any money is taken, on EVERY settlement path — a customer paying cash must
+    // not silently forfeit their balance. Reserved (decremented) up front so a
+    // later Stripe decline can't hand out the same credit twice; the reduced
+    // figure is what lands on the payment row, so a retry re-charges correctly.
+    const afterDiscountCents = finalChargeCents(effectiveBaseCents, discountCents);
+    const creditAppliedCents = alreadyBilled
+      ? 0
+      : await spendCredit(db, row.customerId, afterDiscountCents);
     // Doorstep settlement: the operator collected in person. No Stripe call —
     // the money is already in hand (cash) or captured in the Stripe app
     // (terminal, reconciled there by amount/time).
@@ -669,7 +679,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // The visit completes now and the money confirms asynchronously via the
     // checkout.session.completed webhook.
     if (!alreadyBilled && paymentMethod === 'qr') {
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
       const session = await createDoorstepCheckoutSession({
         visitId,
         amountCents: amount,
@@ -691,13 +701,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: amount,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'pending',
           method: 'qr',
         });
         charge = { attempted: true, ok: true, amount_cents: amount };
       }
     } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
       const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
       await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
       await db.insert(payment).values({
@@ -706,6 +717,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         visitId,
         amountCents: amount,
         discountCents,
+        creditCents: creditAppliedCents,
         status: 'succeeded',
         method: paymentMethod,
       });
@@ -714,7 +726,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       // B3: the /ops amount field is editable for card_on_file too — an
       // operator who types $30 and leaves the default payment method must
       // charge $30, not the standard price.
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
 
       if (amount <= 0) {
         // Fully discounted → comp it, no Stripe call.
@@ -725,6 +737,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: 0,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'succeeded',
         });
         charge = { attempted: true, ok: true, amount_cents: 0 };
@@ -741,6 +754,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: amount,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'pending',
         });
         const result = await chargeOffSession({
@@ -902,6 +916,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           // item minus the discount always agrees with TOTAL PAID below.
           baseCents: effectiveBaseCents,
           discountCents,
+          creditCents: creditAppliedCents,
           totalCents: charge.amount_cents ?? 0,
           outcome:
             paymentMethod === 'cash'

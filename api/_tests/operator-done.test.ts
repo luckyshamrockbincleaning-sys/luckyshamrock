@@ -500,3 +500,51 @@ describe('POST /api/operator/visit/:id/done', () => {
     sessionSpy.mockRestore();
   });
 });
+
+describe('referral credit at Done', () => {
+  async function giveCredit(customerId: string, cents: number) {
+    await getDb().update(customer).set({ creditCents: cents }).where(eq(customer.id, customerId));
+  }
+
+  it('reduces a cash settlement by the balance and spends it', async () => {
+    const c = await seedCustomer();
+    await giveCredit(c, 500); // $5
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+
+    // One-off, 1 bin = $45.00; less $5 credit = $40.00
+    expect(res.body.charge.amount_cents).toBe(4000);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.amountCents).toBe(4000);
+    expect(p!.creditCents).toBe(500);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+
+  it('applies credit on top of the operator discount, never below zero', async () => {
+    const c = await seedCustomer();
+    await giveCredit(c, 100000); // absurd balance
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', discount_cents: 1000 }), res);
+
+    expect(res.body.charge.amount_cents).toBe(0);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    // $45 base − $10 discount = $35 consumed; the rest of the balance survives.
+    expect(after!.creditCents).toBe(100000 - 3500);
+  });
+
+  it('leaves the balance alone when there is none', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.body.charge.amount_cents).toBe(4500);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.creditCents).toBe(0);
+  });
+});
