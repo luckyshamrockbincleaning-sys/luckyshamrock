@@ -9,6 +9,7 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate, operatorNewBookingTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
+import { generateReferralCode } from '../lib/referral.js';
 import {
   createBookingSetupIntent,
   createStripeCustomer,
@@ -214,6 +215,9 @@ export default async function handler(
     }));
     const firstVisitId = visitRows[0]?.id ?? null;
     const tokenPlain = generateMagicLinkToken();
+    // Every customer gets their own shareable code at booking. Generated here
+    // rather than lazily so /manage and the done email can always show one.
+    const newReferralCode = generateReferralCode();
 
     // All booking writes in one transaction: customer (if new) + subscription
     // (if recurring) + visits + magic-link token. If any insert fails, the whole
@@ -234,6 +238,7 @@ export default async function handler(
           binLocation: data.bin_location ?? null,
           stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
           defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
+          referralCode: newReferralCode,
         });
       } else {
         await tx
