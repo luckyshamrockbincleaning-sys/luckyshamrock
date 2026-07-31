@@ -9,7 +9,7 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate, operatorNewBookingTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
-import { generateReferralCode } from '../lib/referral.js';
+import { generateReferralCode, normalizeReferralCode, REFERRAL_CODE_LENGTH } from '../lib/referral.js';
 import {
   createBookingSetupIntent,
   createStripeCustomer,
@@ -101,6 +101,43 @@ export default async function handler(
     } catch (err) {
       console.error('[book:payment_setup] failed', err);
       res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+    }
+    return;
+  }
+
+  // Look up a referral code typed (or link-carried) by a prospective customer.
+  //
+  // ALWAYS 200 with a `valid` flag — never 404 on a miss. A distinguishable
+  // "not found" turns this into a free oracle for enumerating live codes, the
+  // same reason /api/magic-link/send always returns 200 regardless of whether
+  // the email exists. Only the referrer's FIRST NAME is returned: enough to
+  // make "$5 off, courtesy of Richelle" feel real, not enough to hand a
+  // stranger who guessed a code someone's full identity.
+  if (req.body?.intent === 'check_referral') {
+    const code = normalizeReferralCode(String(req.body?.code ?? ''));
+    if (code.length !== REFERRAL_CODE_LENGTH) {
+      res.status(200).json({ status: 'ok', valid: false });
+      return;
+    }
+    try {
+      const db = getDb();
+      const [owner] = await db
+        .select({ name: customer.name })
+        .from(customer)
+        .where(eq(customer.referralCode, code));
+      if (!owner) {
+        res.status(200).json({ status: 'ok', valid: false });
+        return;
+      }
+      res.status(200).json({
+        status: 'ok',
+        valid: true,
+        referrer_first_name: owner.name.trim().split(/\s+/)[0] ?? '',
+      });
+    } catch (err) {
+      console.error('[book:check_referral] failed', err);
+      // Degrade to "no discount" rather than blocking the booking entirely.
+      res.status(200).json({ status: 'ok', valid: false });
     }
     return;
   }
