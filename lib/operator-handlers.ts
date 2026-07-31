@@ -139,6 +139,7 @@ const stopColumns = {
   // One-offs store bin_count on the visit; recurring derive it from the
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
+  creditCents: customer.creditCents,
 } as const;
 
 function isActionableVisitStatus(status: string): boolean {
@@ -591,6 +592,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         postalCode: customer.postalCode,
         stripeCustomerId: customer.stripeCustomerId,
         defaultPaymentMethodId: customer.defaultPaymentMethodId,
+        referralCode: customer.referralCode,
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
@@ -986,6 +988,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       hasWashGif,
       extraBins,
       ratingBaseUrl,
+      // Ask for the referral while the clean bin is still in front of them.
+      // Renders below the star row so the Google-review funnel stays first.
+      referral: row.referralCode
+        ? { code: row.referralCode, shareUrl: `${siteUrl}/?ref=${encodeURIComponent(row.referralCode)}` }
+        : undefined,
       charge: emailCharge,
     });
     const result = isPlaceholderEmail(row.email)

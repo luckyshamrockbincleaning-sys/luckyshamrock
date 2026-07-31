@@ -245,3 +245,34 @@ describe('all templates produce non-empty html and text', () => {
     expect(t.html.length).toBeGreaterThan(0);
   });
 });
+
+describe('doneTemplate — referral block', () => {
+  const referral = { code: 'K7M2QX', shareUrl: 'https://www.luckyshamrock.ca/?ref=K7M2QX' };
+
+  it('renders the code and share link when supplied', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, referral });
+    expect(t.html).toContain('K7M2QX');
+    expect(t.html).toContain('ref=K7M2QX');
+    expect(t.text).toContain('K7M2QX');
+  });
+
+  it('renders nothing when no code is supplied', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null });
+    expect(t.html).not.toContain('ref=');
+    expect(t.text).not.toMatch(/neighbour/i);
+  });
+
+  it('sits BELOW the star row so the review funnel is never displaced', () => {
+    const t = doneTemplate({
+      name: 'Sam',
+      nextVisitDate: null,
+      ratingBaseUrl: 'https://www.luckyshamrock.ca/api/rate?v=1&t=abc',
+      referral,
+    });
+    const starIdx = t.html.indexOf('How did we do?');
+    const referralIdx = t.html.indexOf('K7M2QX');
+    expect(starIdx).toBeGreaterThan(-1);
+    expect(referralIdx).toBeGreaterThan(-1);
+    expect(starIdx).toBeLessThan(referralIdx);
+  });
+});

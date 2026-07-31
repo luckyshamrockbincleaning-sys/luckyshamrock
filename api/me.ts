@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { and, eq, gte, asc, desc, inArray } from 'drizzle-orm';
+import { and, eq, gte, asc, desc, inArray, sql } from 'drizzle-orm';
 import { addWeeks } from 'date-fns';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit } from '../db/schema.js';
@@ -168,8 +168,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       .from(visit)
       .where(and(eq(visit.customerId, customerId), eq(visit.paymentStatus, 'failed')));
 
+    // How many people this customer has sent our way. Counts everyone who
+    // booked with their code, whether or not the reward has been earned yet —
+    // "3 neighbours referred" is the motivating number, not "3 paid out".
+    const [referredCount] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(customer)
+      .where(eq(customer.referredBy, customerId));
+
     res.status(200).json({
       status: 'ok',
+      referral: {
+        code: me.referralCode,
+        credit_cents: me.creditCents,
+        referred_count: referredCount?.n ?? 0,
+      },
       customer: {
         id: me.id,
         email: me.email,

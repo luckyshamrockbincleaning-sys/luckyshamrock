@@ -139,6 +139,67 @@ function CustomerCard({ customer, showPickupDay }) {
   );
 }
 
+// The customer's own referral code, their balance, and how many neighbours
+// they've sent us. Renders nothing without a code — rows predating the feature
+// are backfilled, but a null must degrade quietly rather than show "undefined".
+function ReferralCard({ referral }) {
+  const [copied, setCopied] = useState('');
+  if (!referral || !referral.code) return null;
+
+  const shareUrl = `${window.location.origin}/?ref=${encodeURIComponent(referral.code)}`;
+
+  async function copy(text, which) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(''), 1800);
+    } catch (e) {
+      // Clipboard blocked (insecure context / permissions) — the code is
+      // already on screen to read out, so this is not worth an error state.
+    }
+  }
+
+  return (
+    <div className="manage-card">
+      <h2>Refer a neighbour</h2>
+      <p style={{ marginTop: 0, color: 'var(--ink-3, #6b6b6b)', fontSize: 14 }}>
+        Give a neighbour your code and you both get $5. They save on their first clean,
+        and your $5 comes off your next one automatically.
+      </p>
+
+      <div style={{ textAlign: 'center', margin: '14px 0' }}>
+        <div style={{
+          fontFamily: 'monospace', fontSize: 28, fontWeight: 'bold',
+          letterSpacing: 3, color: '#1d7a3d',
+        }}>{referral.code}</div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+          <button className="btn btn-ghost" onClick={() => copy(referral.code, 'code')}>
+            {copied === 'code' ? 'Copied ✓' : 'Copy code'}
+          </button>
+          <button className="btn btn-ghost" onClick={() => copy(shareUrl, 'link')}>
+            {copied === 'link' ? 'Copied ✓' : 'Copy link'}
+          </button>
+        </div>
+      </div>
+
+      {referral.credit_cents > 0 && (
+        <div className="manage-row">
+          <span>Your credit</span>
+          <span className="v" style={{ color: '#1d7a3d', fontWeight: 600 }}>
+            ${(referral.credit_cents / 100).toFixed(2)} — comes off your next clean
+          </span>
+        </div>
+      )}
+      {referral.referred_count > 0 && (
+        <div className="manage-row">
+          <span>Neighbours referred</span>
+          <span className="v">{referral.referred_count}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
   const [cadence, setCadence] = useState(subscription.cadence);
   const [binCount, setBinCount] = useState(subscription.bin_count);
@@ -460,6 +521,7 @@ function ManageApp() {
             />
           )}
           <VisitsCard visits={state.me.upcoming_visits} onSkip={onSkip} busyVisitId={busyVisitId} />
+          <ReferralCard referral={state.me.referral} />
           {state.me.billing_enabled && (
             <PaymentCard customer={state.me.customer} onSaved={load} />
           )}

@@ -137,6 +137,14 @@ export function doneTemplate(p: {
    */
   extraBins?: Array<{ hasBefore: boolean; hasAfter: boolean }>;
   /**
+   * The customer's own referral code, so a happy customer can pass it to a
+   * neighbour while the clean bin is still in front of them. Rendered BELOW
+   * the star row — never above it. The stars route 4-5★ straight to the Google
+   * review page and are the strongest growth lever in this email; the referral
+   * ask must not displace them.
+   */
+  referral?: { code: string; shareUrl: string };
+  /**
    * Base URL for the tap-a-star rating links (…/api/rate?v=…&t=…). The
    * template appends &stars=1..5. When set, the star row REPLACES the plain
    * review link — 4-5 star taps forward to the Google review anyway.
@@ -252,6 +260,21 @@ export function doneTemplate(p: {
   const reviewHtml = !p.ratingBaseUrl && p.reviewUrl
     ? `<p><a href="${escapeAttr(p.reviewUrl)}">Loved it? Leave us a review →</a></p>`
     : '';
+  const referralHtml = p.referral?.code
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:18px auto 0;border-top:1px solid #eef3ee">` +
+      `<tr><td style="font-size:14px;color:#3d4a3a;text-align:center;padding-top:14px">` +
+      `Know a neighbour with a bin that needs this? Send them your code — you both get $5.` +
+      `</td></tr>` +
+      `<tr><td style="text-align:center;padding-top:8px">` +
+      `<span style="font-family:monospace;font-size:20px;font-weight:bold;letter-spacing:2px;color:#1d7a3d">${escapeHtml(p.referral.code)}</span>` +
+      `</td></tr>` +
+      `<tr><td style="text-align:center;padding-top:6px">` +
+      `<a href="${escapeAttr(p.referral.shareUrl)}" style="color:#1d7a3d;font-size:13px">or share your link →</a>` +
+      `</td></tr></table>`
+    : '';
+  const referralText = p.referral?.code
+    ? `\n\nKnow a neighbour who needs this? Give them your code ${p.referral.code} — you both get $5. ${p.referral.shareUrl}`
+    : '';
   const text =
     `Hi ${p.name},\n\n` +
     `Garbage bin cleaned. ${nextLine}` +
@@ -259,6 +282,7 @@ export function doneTemplate(p: {
     photoText +
     starsText +
     reviewText +
+    referralText +
     `\n\n` +
     FOOTER_TEXT;
   const html = brandWrap(
@@ -268,7 +292,8 @@ export function doneTemplate(p: {
     photoHtml +
     extraBinsHtml +
     starsHtml +
-    reviewHtml,
+    reviewHtml +
+    referralHtml,
   );
   return { subject, html, text };
 }

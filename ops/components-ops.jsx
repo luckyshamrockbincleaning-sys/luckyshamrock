@@ -485,6 +485,13 @@ function StopCard({ stop, onAction, busy, showDate }) {
         <span>{binsLabel}</span>
         {stop.bin_location && <span>📍 {BIN_LOCATION_LABEL[stop.bin_location] || stop.bin_location}</span>}
         {stop.phone && <a className="ops-phone" href={`tel:${stop.phone}`}>{stop.phone}</a>}
+        {/* Referral credit comes off automatically at Done. Surfaced here so a
+            smaller-than-expected charge is never a surprise after the fact. */}
+        {stop.credit_cents > 0 && !isDone && (
+          <span style={{ color: '#1f7a1f', fontWeight: 600 }}>
+            💳 ${(stop.credit_cents / 100).toFixed(2)} credit applies
+          </span>
+        )}
       </div>
 
       {stop.notes && <div className="ops-notes">{stop.notes}</div>}
