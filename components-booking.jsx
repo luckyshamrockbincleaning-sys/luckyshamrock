@@ -144,6 +144,35 @@ const Booking = ({ tweaks }) => {
   });
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
   const [paymentState, setPaymentState] = useStateBk({ phase: 'idle' });
+  // Referral: a neighbour who was texted a link arrives with ?ref=K7M2QX;
+  // someone told over the fence types the code instead. Both must work.
+  const [referral, setReferral] = useStateBk({ code: '', valid: false, firstName: '', checking: false });
+
+  async function checkReferral(raw) {
+    const code = (raw || '').replace(/[\s-]/g, '').toUpperCase();
+    if (code.length !== 6) {
+      setReferral({ code, valid: false, firstName: '', checking: false });
+      return;
+    }
+    setReferral({ code, valid: false, firstName: '', checking: true });
+    try {
+      const r = await fetch('/api/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent: 'check_referral', code }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setReferral({ code, valid: !!d.valid, firstName: d.referrer_first_name || '', checking: false });
+    } catch {
+      // A lookup failure must never block a booking — just no discount.
+      setReferral({ code, valid: false, firstName: '', checking: false });
+    }
+  }
+
+  React.useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('ref');
+    if (fromUrl) checkReferral(fromUrl);
+  }, []);
   const stripeRef = useRef(null);
   const elementsRef = useRef(null);
   const paymentSetupRef = useRef(null);
@@ -305,6 +334,9 @@ const Booking = ({ tweaks }) => {
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
       ...(paymentSetupRef.current ? { payment_setup: paymentSetupRef.current } : {}),
+      // Only send a code the server already confirmed — an unrecognized one is
+      // ignored server-side anyway, but this keeps the payload honest.
+      ...(referral.valid && referral.code ? { referral_code: referral.code } : {}),
     };
 
     try {
@@ -625,6 +657,29 @@ const Booking = ({ tweaks }) => {
                     <option value="garage">Inside garage (unlocked)</option>
                     <option value="back">Back yard / behind gate</option>
                   </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="referral-code">Referral code (optional)</label>
+                  <input
+                    id="referral-code"
+                    type="text"
+                    placeholder="e.g. K7M2QX"
+                    maxLength={8}
+                    value={referral.code}
+                    onChange={e => setReferral({ ...referral, code: e.target.value.toUpperCase(), valid: false, firstName: '' })}
+                    onBlur={e => checkReferral(e.target.value)}
+                  />
+                  {referral.valid && (
+                    <div style={{ color: '#1d7a3d', fontWeight: 600, fontSize: 14, marginTop: 6 }}>
+                      $5 off, courtesy of {referral.firstName} 🍀
+                    </div>
+                  )}
+                  {!referral.valid && !referral.checking && referral.code.length === 6 && (
+                    <div style={{ color: 'var(--ink-3, #6b6b6b)', fontSize: 13, marginTop: 6 }}>
+                      We don't recognize that code — you can still book without it.
+                    </div>
+                  )}
                 </div>
 
                 <div className="booking-nav">
