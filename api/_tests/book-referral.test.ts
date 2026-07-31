@@ -4,7 +4,7 @@ import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
 import { customer } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { REFERRAL_CODE_LENGTH } from '../../lib/referral.js';
+import { REFERRAL_CODE_LENGTH, REFERRAL_REWARD_CENTS } from '../../lib/referral.js';
 
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
@@ -96,5 +96,46 @@ describe('POST /api/book {intent:check_referral}', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.valid).toBe(false);
     }
+  });
+});
+
+describe('booking with a referral code', () => {
+  it('links the friend to the referrer and seeds their $5', async () => {
+    const referrer = await seedReferrer();
+    const res = mockRes();
+    await handler({ method: 'POST', headers: {}, query: {},
+      body: { ...validBooking, name: 'New Friend', email: 'friend@example.com', referral_code: referrer.code } } as any, res);
+    expect(res.statusCode).toBe(200);
+
+    const [friend] = await getDb().select().from(customer).where(eq(customer.email, 'friend@example.com'));
+    expect(friend!.referredBy).toBe(referrer.id);
+    expect(friend!.creditCents).toBe(REFERRAL_REWARD_CENTS);
+    expect(friend!.referralAwardedAt).toBeNull();
+    // The referrer is NOT paid yet — not until the friend's first clean is paid.
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrer.id));
+    expect(ref!.creditCents).toBe(0);
+  });
+
+  it('ignores an unknown code instead of failing the booking', async () => {
+    const res = mockRes();
+    await handler({ method: 'POST', headers: {}, query: {},
+      body: { ...validBooking, email: 'nocode@example.com', referral_code: 'ZZZZZZ' } } as any, res);
+    expect(res.statusCode).toBe(200);
+    const [c] = await getDb().select().from(customer).where(eq(customer.email, 'nocode@example.com'));
+    expect(c!.referredBy).toBeNull();
+    expect(c!.creditCents).toBe(0);
+  });
+
+  it('blocks self-referral: reusing your own code earns nothing', async () => {
+    const referrer = await seedReferrer('self@example.com');
+    const res = mockRes();
+    // Same email re-books (existing-customer path) quoting their own code.
+    await handler({ method: 'POST', headers: {}, query: {},
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-12-02',
+              name: 'Richelle Regehr', email: 'self@example.com', referral_code: referrer.code } } as any, res);
+
+    const [c] = await getDb().select().from(customer).where(eq(customer.id, referrer.id));
+    expect(c!.referredBy).toBeNull();
+    expect(c!.creditCents).toBe(0);
   });
 });

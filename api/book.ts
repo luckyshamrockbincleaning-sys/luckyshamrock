@@ -9,7 +9,12 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate, operatorNewBookingTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
-import { generateReferralCode, normalizeReferralCode, REFERRAL_CODE_LENGTH } from '../lib/referral.js';
+import {
+  generateReferralCode,
+  normalizeReferralCode,
+  REFERRAL_CODE_LENGTH,
+  REFERRAL_REWARD_CENTS,
+} from '../lib/referral.js';
 import {
   createBookingSetupIntent,
   createStripeCustomer,
@@ -216,6 +221,19 @@ export default async function handler(
     const isNewCustomer = !existing;
     const customerId = existing?.id ?? crypto.randomUUID();
 
+    // Resolve an inbound referral code. A bad code silently yields no discount —
+    // never block a real booking over it. Self-referral is rejected by comparing
+    // the resolved owner against the booking customer.
+    let referrerId: string | null = null;
+    const inboundCode = normalizeReferralCode(data.referral_code ?? '');
+    if (inboundCode.length === REFERRAL_CODE_LENGTH) {
+      const [owner] = await db
+        .select({ id: customer.id })
+        .from(customer)
+        .where(eq(customer.referralCode, inboundCode));
+      if (owner && owner.id !== customerId) referrerId = owner.id;
+    }
+
     // Prepare the rows (pure — no I/O yet). The inserts run inside the
     // transaction below so a mid-flight failure can't leave orphan rows.
     // Floored to the day before launch (2026-07-23) so pre-orders can't
@@ -276,6 +294,10 @@ export default async function handler(
           stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
           defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
           referralCode: newReferralCode,
+          referredBy: referrerId,
+          // The friend's welcome $5 rides the same balance the referrer's
+          // reward will — one mechanism, spent automatically at Done.
+          creditCents: referrerId ? REFERRAL_REWARD_CENTS : 0,
         });
       } else {
         await tx
