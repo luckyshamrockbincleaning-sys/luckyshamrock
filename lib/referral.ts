@@ -8,7 +8,7 @@
  * lib/walkup-email.ts was carved out to avoid. Import only db + schema here.
  */
 import { randomBytes } from 'node:crypto';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import { customer } from '../db/schema.js';
 import type { getDb } from '../db/client.js';
 
@@ -73,4 +73,43 @@ export async function spendCredit(db: Db, customerId: string, maxCents: number):
     .returning({ id: customer.id });
 
   return updated.length > 0 ? applied : 0;
+}
+
+/**
+ * Pay a referrer, exactly once, for a friend whose first clean just settled.
+ *
+ * Called from TWO places — handleDone (card/cash/terminal settle synchronously)
+ * and billing-webhook (a QR payment confirms asynchronously). Idempotency comes
+ * from the `referral_awarded_at IS NULL` guard in the WHERE clause: the second
+ * caller updates zero rows and returns without crediting anyone, so a Stripe
+ * redelivery or a double-tapped Done cannot pay twice.
+ *
+ * Callers must only invoke this when money actually moved. A comped clean must
+ * never trigger it.
+ */
+export async function awardReferralIfEarned(
+  db: Db,
+  friendCustomerId: string,
+): Promise<{ awarded: boolean; referrerId: string | null }> {
+  const [friend] = await db
+    .select({ referredBy: customer.referredBy, awardedAt: customer.referralAwardedAt })
+    .from(customer)
+    .where(eq(customer.id, friendCustomerId));
+
+  if (!friend?.referredBy || friend.awardedAt) return { awarded: false, referrerId: null };
+
+  // Claim the payout first. Whoever wins this UPDATE owns the credit.
+  const claimed = await db
+    .update(customer)
+    .set({ referralAwardedAt: new Date() })
+    .where(and(eq(customer.id, friendCustomerId), isNull(customer.referralAwardedAt)))
+    .returning({ id: customer.id });
+  if (claimed.length === 0) return { awarded: false, referrerId: null };
+
+  await db
+    .update(customer)
+    .set({ creditCents: sql`${customer.creditCents} + ${REFERRAL_REWARD_CENTS}` })
+    .where(eq(customer.id, friend.referredBy));
+
+  return { awarded: true, referrerId: friend.referredBy };
 }

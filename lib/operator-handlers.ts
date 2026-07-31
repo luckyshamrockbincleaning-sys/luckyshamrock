@@ -27,6 +27,7 @@ import {
   onOurWayTemplate,
   doneTemplate,
   bookingConfirmedTemplate,
+  referralEarnedTemplate,
   DONE_BEFORE_PHOTO_CID,
   DONE_AFTER_PHOTO_CID,
   DONE_WASH_GIF_CID,
@@ -45,7 +46,7 @@ import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
-import { spendCredit } from './referral.js';
+import { spendCredit, awardReferralIfEarned } from './referral.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -778,6 +779,38 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
           .where(eq(visit.id, visitId));
         charge = { attempted: true, ok: result.ok, amount_cents: amount, error: result.ok ? undefined : result.error };
+      }
+    }
+
+    // Pay the referrer only when money actually moved on this clean. A comped
+    // clean and an unscanned QR are both excluded — QR is awarded later by the
+    // checkout.session.completed webhook, once the customer has really paid.
+    // Best-effort: a failure here must never break a completed clean.
+    const settledForReferral =
+      charge.attempted && charge.ok && (charge.amount_cents ?? 0) > 0 && paymentMethod !== 'qr';
+    if (settledForReferral) {
+      try {
+        const award = await awardReferralIfEarned(db, row.customerId);
+        if (award.awarded && award.referrerId) {
+          const [ref] = await db
+            .select({ email: customer.email, name: customer.name, creditCents: customer.creditCents })
+            .from(customer)
+            .where(eq(customer.id, award.referrerId));
+          if (ref && !isPlaceholderEmail(ref.email)) {
+            const refTpl = referralEarnedTemplate({ name: ref.name, creditCents: ref.creditCents });
+            await sendAndLog({
+              kind: 'referral_earned',
+              to: ref.email,
+              subject: refTpl.subject,
+              body: refTpl.text,
+              html: refTpl.html,
+              customerId: award.referrerId,
+              visitId,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[operator/visit/done] referral award failed (clean unaffected)', err);
       }
     }
 

@@ -548,3 +548,60 @@ describe('referral credit at Done', () => {
     expect(p!.creditCents).toBe(0);
   });
 });
+
+describe('referrer payout', () => {
+  async function seedPair() {
+    const db = getDb();
+    const referrerId = await seedCustomer();
+    const friendId = await seedCustomer();
+    await db.update(customer).set({ referredBy: referrerId }).where(eq(customer.id, friendId));
+    return { referrerId, friendId };
+  }
+
+  it("pays the referrer $5 once the friend's clean is done and paid", async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(500);
+    const [friend] = await getDb().select().from(customer).where(eq(customer.id, friendId));
+    expect(friend!.referralAwardedAt).not.toBeNull();
+  });
+
+  it('never pays twice, even across two separate cleans', async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+    const v2 = await addVisit(friendId, '2026-09-10');
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), mockRes());
+    await handler(await req(true, v2, 'POST', { payment_method: 'cash' }), mockRes());
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(500); // not 1000
+  });
+
+  it('does NOT pay on a fully comped clean — no money changed hands', async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+    // Discount exceeding the price comps the visit.
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', discount_cents: 100000 }), mockRes());
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(0);
+    const [friend] = await getDb().select().from(customer).where(eq(customer.id, friendId));
+    expect(friend!.referralAwardedAt).toBeNull();
+  });
+
+  it('does nothing for a customer who was never referred', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+});

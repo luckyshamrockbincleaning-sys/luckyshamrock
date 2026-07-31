@@ -284,6 +284,29 @@ export function doneTemplate(p: {
  * confirmation — and it's what the post-payment page's "your receipt is on its
  * way by email" promises.
  */
+/**
+ * Sent to a referrer when someone they sent us has had their first clean
+ * completed and paid. Deliberately not sent at the friend's booking — nothing
+ * is earned until money actually moves.
+ */
+export function referralEarnedTemplate(p: { name: string; creditCents: number }): RenderedEmail {
+  const subject = `You earned $5 — thanks for the referral`;
+  const amount = formatCad(p.creditCents);
+  const text =
+    `Hi ${p.name},\n\n` +
+    `Your neighbour's bin is clean — thanks for sending them our way.\n\n` +
+    `You've got ${amount} credit waiting. It comes off your next clean automatically, ` +
+    `and it never expires.\n\n` +
+    FOOTER_TEXT;
+  const html = brandWrap(
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>Your neighbour's bin is clean — thanks for sending them our way. 🍀</p>` +
+    `<p>You've got <strong>${amount}</strong> credit waiting. It comes off your next clean ` +
+    `automatically, and it never expires.</p>`,
+  );
+  return { subject, html, text };
+}
+
 export function receiptTemplate(p: { name: string; amountCents: number }): RenderedEmail {
   const subject = `Payment received — ${formatCad(p.amountCents)}`;
   const text =
