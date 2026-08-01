@@ -204,7 +204,10 @@ const Hero = ({ tweaks, onBookClick }) => (
               <span className="stars">
                 <Icon.Star size={16}/><Icon.Star size={16}/><Icon.Star size={16}/><Icon.Star size={16}/><Icon.Star size={16}/>
               </span>
-              4.9 · 380+ neighbors
+              {/* Must match the live Google Business Profile. Never state a
+                  review count or average we can't point at — the previous
+                  "4.9 · 380+ neighbors" was invented and checkable. */}
+              5.0 on Google
             </div>
             <div className="hero-trust-item">
               <Icon.Shield size={16} color="var(--green)"/> Fully insured

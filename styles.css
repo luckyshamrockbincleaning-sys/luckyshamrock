@@ -944,6 +944,17 @@ footer::before { background: var(--green-darker); }
   grid-template-columns: repeat(3, 1fr);
   gap: 22px;
 }
+/* We only publish real reviews, so this section can legitimately hold one or
+   two cards. Without this a lone card clings to the left of a 3-up grid with a
+   dead gap beside it, which reads as broken rather than honest. */
+.testimonials-grid:has(> :only-child) {
+  grid-template-columns: minmax(0, 560px);
+  justify-content: center;
+}
+.testimonials-grid:has(> :nth-child(2):last-child) {
+  grid-template-columns: repeat(2, minmax(0, 420px));
+  justify-content: center;
+}
 .testimonial-card {
   background: var(--white);
   border-radius: var(--r-lg);

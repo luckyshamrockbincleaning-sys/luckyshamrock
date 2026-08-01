@@ -2,29 +2,22 @@
 const { useState: useStateFt } = React;
 
 // ===== Testimonials =====
+// REAL reviews only. Every quote here must be verbatim from a customer who
+// actually published it — currently our Google Business Profile. The three
+// placeholder testimonials that used to live here (invented names, invented
+// multi-year tenures for a business that launched 2026-07-23) were removed on
+// 2026-08-01 when the first genuine review landed: one real quote sitting
+// beside fabricated ones lends them credibility, which is worse than either
+// alone. Add to this list only by copying a published review.
 const Testimonials = () => {
   const cards = [
     {
       stars: 5,
-      quote: "I didn't know my 'garbage' bin could smell so good. I keep going out to sniff it. My husband is worried.",
-      name: "Saoirse M.",
-      meta: "Monthly · 18 months",
-      avatar: "S",
+      quote: "Excellent attention to detail. Booking process is extremely easy. Showed up on time, and receiving a “we're on the way” message was a nice touch. Also received before and after photos which was really satisfying haha highly recommend!",
+      name: "Anna B.",
+      meta: "Google review · Local Guide",
+      avatar: "A",
     },
-    {
-      stars: 5,
-      quote: "The photo they text you after is so satisfying. It's like a before/after but the after is just… a normal garbage bin.",
-      name: "Dev P.",
-      meta: "Three Wash Season · 1 year",
-      avatar: "D",
-    },
-    {
-      stars: 5,
-      quote: "Showed up the morning after pickup, gone in 12 minutes, didn't even need to be home. This is the easiest money I spend each month.",
-      name: "Marcus & Jen L.",
-      meta: "Monthly · 2 years",
-      avatar: "M",
-    }
   ];
 
   return (
@@ -34,8 +27,8 @@ const Testimonials = () => {
         </div>
 
         <p className="testimonial-pullquote">
-          "I didn't know my 'garbage' bin <span className="accent">could smell so good.</span>"
-          <span className="attr">— Saoirse M., monthly subscriber since '24</span>
+          "Booking process is extremely easy. <span className="accent">Highly recommend!</span>"
+          <span className="attr">— Anna B., verified Google review</span>
         </p>
 
         <div className="testimonials-grid">
