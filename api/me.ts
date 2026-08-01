@@ -2,13 +2,17 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { and, eq, gte, asc, desc, inArray, sql } from 'drizzle-orm';
 import { addWeeks } from 'date-fns';
 import { getDb } from '../db/client.js';
-import { customer, subscription, visit } from '../db/schema.js';
+import { customer, subscription, visit, payment } from '../db/schema.js';
 import { getSessionCustomerId } from '../lib/session.js';
 import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { effectiveStartDate } from '../lib/launch.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
+
+// How many past cleans /manage shows. This list only grows, and nobody scrolls
+// past a dozen — the done emails remain the full archive.
+const PAST_VISIT_LIMIT = 12;
 
 const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
@@ -168,6 +172,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       .from(visit)
       .where(and(eq(visit.customerId, customerId), eq(visit.paymentStatus, 'failed')));
 
+    // Past cleans — the customer's own service record. Until now a visit
+    // vanished from /manage the moment it was done, so somebody charged $57 had
+    // nothing to look back at: the done email was the only receipt they ever
+    // got, and if it was lost there was no other trace. Newest first, capped —
+    // this list only grows.
+    //
+    // `done` only: a cancelled or skipped visit is a plan change, not a clean
+    // they received. (Cancelling a subscription also sweeps a dozen FUTURE
+    // visits to `cancelled`, which would flood this list — the same trap the
+    // operator history hit against real data.)
+    const pastVisits = await db
+      .select({
+        id: visit.id,
+        scheduledFor: visit.scheduledFor,
+        doneAt: visit.doneAt,
+        paymentStatus: visit.paymentStatus,
+        amountCents: payment.amountCents,
+        creditCents: payment.creditCents,
+        method: payment.method,
+      })
+      .from(visit)
+      // A visit can hold several payment rows (a decline then a retry); the
+      // settled one is what the customer actually paid.
+      .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'succeeded')))
+      .where(and(eq(visit.customerId, customerId), eq(visit.status, 'done')))
+      .orderBy(desc(visit.scheduledFor))
+      .limit(PAST_VISIT_LIMIT);
+
     // How many people this customer has sent our way. Counts everyone who
     // booked with their code, whether or not the reward has been earned yet —
     // "3 neighbours referred" is the motivating number, not "3 paid out".
@@ -210,6 +242,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         status: v.status,
         subscription_id: v.subscriptionId,
         notes: v.notes,
+      })),
+      past_visits: pastVisits.map((v) => ({
+        id: v.id,
+        scheduled_for: v.scheduledFor.toISOString().slice(0, 10),
+        done_at: v.doneAt,
+        payment_status: v.paymentStatus,
+        amount_cents: v.amountCents ?? null,
+        credit_cents: v.creditCents ?? 0,
+        payment_method: v.method ?? null,
       })),
       payment_alert: failedVisits.length > 0 ? { failed_count: failedVisits.length } : null,
     });

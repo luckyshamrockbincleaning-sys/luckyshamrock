@@ -139,6 +139,49 @@ function CustomerCard({ customer, showPickupDay }) {
   );
 }
 
+// The customer's own service record. Before this, a clean vanished from this
+// page the moment it was done — somebody charged $57 had nothing to look back
+// at, and the done email was their only receipt.
+const PAY_METHOD_LABEL = {
+  card: 'card on file',
+  cash: 'cash',
+  terminal: 'card in person',
+  qr: 'paid by QR',
+};
+
+function PastVisitsCard({ visits }) {
+  if (!visits || visits.length === 0) return null;
+
+  function paidLabel(v) {
+    if (v.payment_status === 'comped') return 'no charge';
+    if (v.amount_cents == null) return '';
+    const amount = `$${(v.amount_cents / 100).toFixed(2)}`;
+    const how = PAY_METHOD_LABEL[v.payment_method];
+    return how ? `${amount} · ${how}` : amount;
+  }
+
+  return (
+    <div className="manage-card">
+      <h2>Past cleans</h2>
+      {visits.map((v) => (
+        <div className="manage-row" key={v.id}>
+          <span>{formatDate(v.scheduled_for)}</span>
+          <span className="v">
+            {paidLabel(v)}
+            {v.credit_cents > 0 && (
+              <span style={{ color: '#1d7a3d' }}> (incl. ${(v.credit_cents / 100).toFixed(2)} credit)</span>
+            )}
+          </span>
+        </div>
+      ))}
+      <p style={{ marginBottom: 0, marginTop: 10, fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+        Showing your {visits.length === 1 ? 'most recent clean' : `${visits.length} most recent cleans`}.
+        Every clean also emails you a photo and a receipt.
+      </p>
+    </div>
+  );
+}
+
 // The customer's own referral code, their balance, and how many neighbours
 // they've sent us. Renders nothing without a code — rows predating the feature
 // are backfilled, but a null must degrade quietly rather than show "undefined".
@@ -521,6 +564,7 @@ function ManageApp() {
             />
           )}
           <VisitsCard visits={state.me.upcoming_visits} onSkip={onSkip} busyVisitId={busyVisitId} />
+          <PastVisitsCard visits={state.me.past_visits} />
           <ReferralCard referral={state.me.referral} />
           {state.me.billing_enabled && (
             <PaymentCard customer={state.me.customer} onSaved={load} />

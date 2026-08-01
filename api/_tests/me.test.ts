@@ -3,7 +3,7 @@ import handler from '../me.js';
 import { mockReq } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, subscription, visit } from '../../db/schema.js';
+import { customer, subscription, visit, payment } from '../../db/schema.js';
 import { signSessionCookie, SESSION_COOKIE_NAME } from '../../lib/cookies.js';
 import { eq } from 'drizzle-orm';
 
@@ -244,5 +244,68 @@ describe('GET /api/me — referral', () => {
     await handler(await reqWithSession(id), res);
     expect(res.body.referral.credit_cents).toBe(0);
     expect(res.body.referral.referred_count).toBe(0);
+  });
+});
+
+describe('GET /api/me — past cleans', () => {
+  async function addDoneVisit(customerId: string, date: string, amountCents: number | null, method?: string) {
+    const db = getDb();
+    const id = crypto.randomUUID();
+    await db.insert(visit).values({
+      id, customerId, subscriptionId: null, binCount: 1,
+      scheduledFor: new Date(`${date}T12:00:00Z`),
+      status: 'done', paymentStatus: 'charged', doneAt: new Date(`${date}T18:00:00Z`),
+    });
+    if (amountCents !== null) {
+      await db.insert(payment).values({
+        id: crypto.randomUUID(), customerId, visitId: id,
+        amountCents, discountCents: 0, creditCents: 0,
+        status: 'succeeded', method: (method ?? 'card') as any,
+      });
+    }
+    return id;
+  }
+
+  it('returns past cleans newest first with what was charged', async () => {
+    const id = await makeCustomer();
+    await addDoneVisit(id, '2026-06-10', 3500);
+    await addDoneVisit(id, '2026-07-08', 5700);
+
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.past_visits).toHaveLength(2);
+    expect(res.body.past_visits[0].scheduled_for).toBe('2026-07-08');
+    expect(res.body.past_visits[0].amount_cents).toBe(5700);
+    expect(res.body.past_visits[1].amount_cents).toBe(3500);
+  });
+
+  it('does not leak another customer\'s cleans', async () => {
+    const mine = await makeCustomer();
+    const theirs = await makeCustomer();
+    await addDoneVisit(mine, '2026-06-10', 3500);
+    await addDoneVisit(theirs, '2026-06-11', 9900);
+
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(mine), res);
+    expect(res.body.past_visits).toHaveLength(1);
+    expect(res.body.past_visits[0].amount_cents).toBe(3500);
+  });
+
+  it('shows a clean with no payment row rather than hiding it', async () => {
+    const id = await makeCustomer();
+    await addDoneVisit(id, '2026-06-10', null);
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+    expect(res.body.past_visits).toHaveLength(1);
+    expect(res.body.past_visits[0].amount_cents).toBeNull();
+  });
+
+  it('is empty for a customer with no history', async () => {
+    const id = await makeCustomer();
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+    expect(res.body.past_visits).toEqual([]);
   });
 });
