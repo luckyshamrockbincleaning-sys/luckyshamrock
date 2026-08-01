@@ -296,6 +296,41 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   Use `sk_test_`/`pk_test_` until a deliberate live cutover. Pin the SDK
   `apiVersion` in `lib/stripe.ts` (currently `2026-05-27.dahlia` for stripe@22).
 
+## Referral program conventions
+
+- **One balance, two sources.** `customer.credit_cents` holds BOTH the friend's
+  welcome $5 and any referral $5 earned. There is no separate discount path —
+  everything is balance, spent at Done. `REFERRAL_REWARD_CENTS` in
+  `lib/referral.ts` is the single source for the amount.
+- **Codes** are 6 chars from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no `0/O/1/I/L` —
+  they get said aloud over a fence). Issued at booking (`api/book.ts`) AND on
+  walk-ups (`handleNewJob`); `db/backfill-referral-codes.ts` covers rows that
+  predate the feature. **Any new customer-creation path must issue one** or that
+  customer can never refer anyone.
+- **`lib/referral.ts` must stay dependency-light.** `billing-webhook.ts` imports
+  it; importing `operator-handlers.ts` there would drag `sharp` + `gifenc` + the
+  ~947 KB sprite module into the webhook bundle. Same reason `walkup-email.ts`
+  exists.
+- **Credit is reserved before settlement, released if unspent.** The amount
+  depends on it (and a QR Checkout Session must be created for that exact
+  figure), so `spendCredit` runs first — but every branch that writes a
+  `payment` row sets `creditCommitted`, and anything still reserved afterwards
+  is handed back via `releaseCredit`. Without that, a customer with no card on
+  file loses their balance on a clean nobody was charged for. **If you add a
+  fifth settlement path, it must set `creditCommitted`.**
+- **`check_referral` always returns 200** with a `valid` boolean — never 404 on
+  an unknown code (that would be an enumeration oracle), and only ever the
+  referrer's FIRST name. Same rule as `/api/magic-link/send`.
+- **The referrer is paid only when money actually moved.** `comped` never pays.
+  QR is awarded in `billing-webhook.ts` on `checkout.session.completed`, not at
+  Done, because nobody has paid at Done time. `referral_awarded_at` is the
+  idempotency guard — a redelivered webhook or double-tapped Done pays once.
+- **Self-referral is blocked**, and `referred_by` is written once and never
+  rewritten (so re-booking with a different code can't farm credit).
+- **The done email's referral block sits BELOW the star row.** Those stars route
+  4–5★ to Google and are the strongest growth lever in that email; a test in
+  `lib/_tests/templates.test.ts` asserts the ordering.
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.
