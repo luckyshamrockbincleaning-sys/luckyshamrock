@@ -66,6 +66,21 @@ describe('GET /api/operator/history', () => {
       .toEqual(['2026-07-20', '2026-07-15', '2026-07-01']);
   });
 
+  it('excludes future-dated cancellations — history means the past', async () => {
+    // Cancelling a subscription sweeps a dozen future visits to `cancelled`.
+    // Those never happened and never will; showing them buries the real work
+    // under a wall of noise (exactly what production looked like on day one).
+    const c = await seedCustomer();
+    await addVisit(c, '2026-07-01', 'done', 'charged');
+    await addVisit(c, '2027-06-10', 'cancelled');
+    await addVisit(c, '2027-05-13', 'cancelled');
+
+    const res = mockRes();
+    await handler(await req(true), res);
+    expect(res.body.visits).toHaveLength(1);
+    expect(res.body.visits[0].scheduled_for).toBe('2026-07-01');
+  });
+
   it('excludes work that has not happened yet', async () => {
     const c = await seedCustomer();
     await addVisit(c, '2026-07-01', 'done', 'charged');

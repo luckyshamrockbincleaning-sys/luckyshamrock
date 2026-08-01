@@ -10,7 +10,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, gt, inArray, asc, desc, sql } from 'drizzle-orm';
+import { and, eq, gt, lte, inArray, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, payment, magicLinkToken } from '../db/schema.js';
 import {
@@ -521,7 +521,16 @@ export async function handleHistory(req: VercelRequest, res: VercelResponse): Pr
       // A visit can have several payment rows (a decline then a retry); take
       // the settled one so history shows what was actually collected.
       .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'succeeded')))
-      .where(inArray(visit.status, HISTORY_STATUSES))
+      // Only the past. Cancelling a subscription sweeps a dozen FUTURE visits
+      // to `cancelled`; those never happened and never will, and letting them
+      // in buries real completed work under a wall of noise (which is exactly
+      // what production looked like the first time this ran).
+      .where(
+        and(
+          inArray(visit.status, HISTORY_STATUSES),
+          lte(visit.scheduledFor, new Date(`${operatorTodayISO()}T23:59:59Z`)),
+        ),
+      )
       .orderBy(desc(visit.scheduledFor), desc(visit.doneAt))
       .limit(limit + 1)
       .offset(offset);
