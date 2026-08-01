@@ -198,3 +198,25 @@
 .flash.err { background: #F5DADA; color: #7A2222; }
 
 .muted { color: #6b6b6b; font-size: 14px; }
+
+/* Done can legitimately take 5-10s (photo upload + wash-animation build), so
+   the button spins rather than sitting there looking unpressed. */
+.ops-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: ops-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes ops-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Respect reduced-motion: keep the state visible, drop the rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .ops-spinner { animation: none; opacity: 0.7; }
+}

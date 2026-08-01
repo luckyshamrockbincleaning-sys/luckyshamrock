@@ -4,6 +4,7 @@ import {
   handleToday,
   handleUpcoming,
   handleAttention,
+  handleHistory,
   handleAct,
   handleNewJob,
 } from '../../lib/operator-handlers.js';
@@ -35,6 +36,7 @@ const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promi
   today: handleToday,
   upcoming: handleUpcoming,
   attention: handleAttention,
+  history: handleHistory,
   act: handleAct,
   job: handleNewJob,
 };

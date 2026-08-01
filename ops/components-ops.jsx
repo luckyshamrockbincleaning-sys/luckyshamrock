@@ -379,6 +379,12 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const [discount, setDiscount] = useState('');
   const [payMethod, setPayMethod] = useState('card_on_file');
   const [amountOverride, setAmountOverride] = useState('');
+  // A Done with photos genuinely takes 5-10s: ~1MB of images upload over mobile
+  // data, then the server builds the wash animation (7-13s on real photos). It
+  // can't move to the background — Vercel freezes the function once it responds.
+  // So the button has to SAY it's working, or the operator assumes he missed it
+  // and taps again.
+  const [submitting, setSubmitting] = useState(false);
   // One before/after pair per bin. bin 0 is the "hero" pair — it's the one
   // the server turns into the wash-GIF animation; bins 1+ always ride along
   // as plain before/after photos (see lib/operator-handlers.ts).
@@ -406,6 +412,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
   }
 
   async function doneWithDiscount() {
+    if (submitting) return; // guard the impatient double-tap
     const missingAfter = bins.findIndex((b) => !b.after.photo);
     if (missingAfter !== -1) {
       setBinPhoto(missingAfter, 'after', {
@@ -435,7 +442,13 @@ function StopCard({ stop, onAction, busy, showDate }) {
     };
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
-    const result = await onAction('done', stop, payload);
+    setSubmitting(true);
+    let result;
+    try {
+      result = await onAction('done', stop, payload);
+    } finally {
+      setSubmitting(false);
+    }
     // onAction swallows errors and returns undefined on failure (and on a 401),
     // so a falsy result means the Done did NOT go through — keep the persisted
     // photos so the operator can retry without re-shooting them in the field.
@@ -601,17 +614,30 @@ function StopCard({ stop, onAction, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
+            disabled={busy || submitting || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
             onClick={doneWithDiscount}
+            style={submitting ? { opacity: 0.85 } : undefined}
           >
-            Done
+            {submitting ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span className="ops-spinner" aria-hidden="true" />
+                Finishing…
+              </span>
+            ) : 'Done'}
           </button>
         )}
         {!isDone && !isCancelled && !isSkipped && (
-          <button className="btn btn-skip ops-btn" disabled={busy} onClick={() => onAction('skip', stop)}>Skip</button>
+          <button className="btn btn-skip ops-btn" disabled={busy || submitting} onClick={() => onAction('skip', stop)}>Skip</button>
         )}
-        <button className="btn btn-ghost ops-btn" disabled={busy} onClick={() => onAction('note', stop)}>Note</button>
+        <button className="btn btn-ghost ops-btn" disabled={busy || submitting} onClick={() => onAction('note', stop)}>Note</button>
       </div>
+
+      {submitting && (
+        <div style={{ marginTop: 10, fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+          Sending the photos and building the wash animation — this takes a few
+          seconds. Don't close the page.
+        </div>
+      )}
     </div>
   );
 }
@@ -637,6 +663,48 @@ function QrPanel({ qr, onDismiss }) {
       <div style={{ marginTop: 8, fontSize: 12 }}>
         <a href={qr.url} target="_blank" rel="noopener" style={{ color: '#1d7a3d' }}>or open the payment link</a>
       </div>
+    </div>
+  );
+}
+
+// A finished job. Read-only on purpose: history is for looking things up, not
+// for re-doing work — an action button here would be a way to accidentally
+// re-charge a customer weeks later.
+const HISTORY_STATUS_STYLE = {
+  done: { label: '✓ done', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  skipped: { label: 'skipped', color: '#7a5a12', bg: '#FBF0D5' },
+  cancelled: { label: 'cancelled', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
+};
+
+function HistoryCard({ item }) {
+  const st = HISTORY_STATUS_STYLE[item.status] || HISTORY_STATUS_STYLE.done;
+  const pay = PAY_BADGE[item.payment_status];
+  const bins = item.bin_count ? `${item.bin_count} bin${item.bin_count > 1 ? 's' : ''}` : null;
+  // Only meaningful on a job that actually settled.
+  const collected = item.amount_cents != null ? `$${(item.amount_cents / 100).toFixed(2)}` : null;
+
+  return (
+    <div className="ops-card">
+      <div className="ops-card-head">
+        <div>
+          <div className="ops-date">{formatDate(item.scheduled_for)}</div>
+          <div className="ops-name">{item.customer_name}</div>
+          <div className="ops-addr">{item.street}, {item.city} {item.postal_code}</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <span className="visit-status" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+          {item.status === 'done' && pay && (
+            <span className="visit-status" style={{ background: pay.bg, color: pay.color }}>{pay.label}</span>
+          )}
+        </div>
+      </div>
+      <div className="ops-meta">
+        {bins && <span>{bins}</span>}
+        {collected && <span>{collected} collected</span>}
+        {item.credit_cents > 0 && <span>incl. ${(item.credit_cents / 100).toFixed(2)} credit</span>}
+        {item.phone && <a className="ops-phone" href={`tel:${item.phone}`}>{item.phone}</a>}
+      </div>
+      {item.notes && <div className="ops-notes">{item.notes}</div>}
     </div>
   );
 }
@@ -701,6 +769,7 @@ function OpsApp() {
     const url =
       which === 'upcoming' ? '/api/operator/upcoming'
       : which === 'attention' ? '/api/operator/attention'
+      : which === 'history' ? '/api/operator/history'
       : '/api/operator/today';
     try {
       const r = await fetch(url, { credentials: 'same-origin' });
@@ -712,7 +781,7 @@ function OpsApp() {
       const b = await r.json();
       if (!r.ok) throw new Error(b.message || 'Could not load.');
       setAuthed(true);
-      setData({ loading: false, stops: b.visits || [], date: b.date || null });
+      setData({ loading: false, stops: b.visits || [], date: b.date || null, hasMore: !!b.has_more });
     } catch (e) {
       setData({ loading: false, stops: [], date: null });
       setFlash({ kind: 'err', text: e.message });
@@ -859,7 +928,12 @@ function OpsApp() {
   return (
     <div className="ops-shell">
       <div className="ops-header">
-        <h1>{view === 'today' ? "Today's route" : view === 'attention' ? 'Needs attention' : 'All upcoming'}</h1>
+        <h1>{
+          view === 'today' ? "Today's route"
+          : view === 'attention' ? 'Needs attention'
+          : view === 'history' ? 'History'
+          : 'All upcoming'
+        }</h1>
         <a className="brand" href="/">Lucky Shamrock</a>
       </div>
 
@@ -872,6 +946,9 @@ function OpsApp() {
         </button>
         <button className={view === 'attention' ? 'active' : ''} onClick={() => setView('attention')}>
           Needs attention
+        </button>
+        <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>
+          History
         </button>
       </div>
 
@@ -918,6 +995,7 @@ function OpsApp() {
           <p className="muted">
             {view === 'today' ? 'No stops scheduled today.'
               : view === 'attention' ? 'Nothing needs attention — all paid up. 🍀'
+              : view === 'history' ? 'No finished jobs yet — completed cleans show up here.'
               : 'Nothing booked after today.'}
           </p>
         </div>
@@ -925,6 +1003,17 @@ function OpsApp() {
         data.stops.map((s) => (
           <AttentionCard key={s.id} item={s} onAction={onAction} busy={busy} />
         ))
+      ) : view === 'history' ? (
+        <>
+          {data.stops.map((s) => <HistoryCard key={s.id} item={s} />)}
+          {data.hasMore && (
+            <div className="ops-card" style={{ textAlign: 'center' }}>
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                Showing the {data.stops.length} most recent. Older jobs aren't shown yet.
+              </p>
+            </div>
+          )}
+        </>
       ) : (
         data.stops.map((s) => (
           <StopCard key={s.id} stop={s} onAction={onAction} busy={busy} showDate={view === 'upcoming'} />

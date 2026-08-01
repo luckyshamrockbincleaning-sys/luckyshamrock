@@ -473,6 +473,81 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// GET /api/operator/history  → finished work, newest first, paged
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * Everything the route views deliberately hide. `today` and `upcoming` return
+ * only actionable visits, so the moment a stop is marked done it disappears
+ * from the operator's app entirely — there was no way to look back at last
+ * week, find a job that was skipped, or check what a customer was charged.
+ *
+ * Paged because this grows without bound, and ordered newest-first because
+ * recent work is what anyone actually looks for.
+ */
+const HISTORY_STATUSES: Array<'done' | 'skipped' | 'cancelled'> = ['done', 'skipped', 'cancelled'];
+const HISTORY_MAX_LIMIT = 100;
+const HISTORY_DEFAULT_LIMIT = 25;
+
+export async function handleHistory(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  try {
+    // Never trust a client-supplied page size — clamp it.
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.trunc(rawLimit), HISTORY_MAX_LIMIT)
+      : HISTORY_DEFAULT_LIMIT;
+    const rawOffset = Number(req.query.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.trunc(rawOffset) : 0;
+
+    const db = getDb();
+    // Fetch one extra row to answer has_more without a second COUNT query.
+    const rows = await db
+      .select({
+        ...stopColumns,
+        amountCents: payment.amountCents,
+        paymentCreditCents: payment.creditCents,
+        paymentMethod: payment.method,
+      })
+      .from(visit)
+      .innerJoin(customer, eq(visit.customerId, customer.id))
+      .leftJoin(subscription, eq(visit.subscriptionId, subscription.id))
+      // A visit can have several payment rows (a decline then a retry); take
+      // the settled one so history shows what was actually collected.
+      .leftJoin(payment, and(eq(payment.visitId, visit.id), eq(payment.status, 'succeeded')))
+      .where(inArray(visit.status, HISTORY_STATUSES))
+      .orderBy(desc(visit.scheduledFor), desc(visit.doneAt))
+      .limit(limit + 1)
+      .offset(offset);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    res.status(200).json({
+      status: 'ok',
+      limit,
+      offset,
+      has_more: hasMore,
+      visits: page.map((r) => ({
+        ...toOperatorVisit(r),
+        amount_cents: r.amountCents ?? null,
+        credit_cents: r.paymentCreditCents ?? 0,
+        payment_method: r.paymentMethod ?? null,
+      })),
+    });
+  } catch (err) {
+    console.error('[operator/history] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // POST /api/operator/visit/:id/notify  → on_our_way email + heading_there
 // ─────────────────────────────────────────────────────────────────────
 export async function handleNotify(req: VercelRequest, res: VercelResponse): Promise<void> {
