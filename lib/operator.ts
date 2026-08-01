@@ -127,6 +127,7 @@ export interface OperatorVisitRow {
   postalCode: string;
   binLocation: string | null;
   binCount: number | null;
+  creditCents?: number | null;
 }
 
 /** Pure mapper: joined DB row → the snake_case stop DTO the /ops page consumes. */
@@ -141,6 +142,9 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     postal_code: r.postalCode,
     bin_location: r.binLocation,
     bin_count: r.binCount,
+    // Shown as a badge on the stop card so the operator sees a reduced
+    // charge coming BEFORE tapping Done, never as a surprise afterwards.
+    credit_cents: r.creditCents ?? 0,
     status: r.status,
     payment_status: r.paymentStatus,
     notes: r.notes,

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
@@ -9,6 +9,12 @@ import { generateVisitDates, generateSeasonalDates, type Cadence } from '../lib/
 import { sendAndLog } from '../lib/notifications.js';
 import { bookingConfirmedTemplate, operatorNewBookingTemplate } from '../lib/email/templates.js';
 import { generateMagicLinkToken, hashToken } from '../lib/tokens.js';
+import {
+  generateReferralCode,
+  normalizeReferralCode,
+  REFERRAL_CODE_LENGTH,
+  REFERRAL_REWARD_CENTS,
+} from '../lib/referral.js';
 import {
   createBookingSetupIntent,
   createStripeCustomer,
@@ -104,6 +110,43 @@ export default async function handler(
     return;
   }
 
+  // Look up a referral code typed (or link-carried) by a prospective customer.
+  //
+  // ALWAYS 200 with a `valid` flag — never 404 on a miss. A distinguishable
+  // "not found" turns this into a free oracle for enumerating live codes, the
+  // same reason /api/magic-link/send always returns 200 regardless of whether
+  // the email exists. Only the referrer's FIRST NAME is returned: enough to
+  // make "$5 off, courtesy of Richelle" feel real, not enough to hand a
+  // stranger who guessed a code someone's full identity.
+  if (req.body?.intent === 'check_referral') {
+    const code = normalizeReferralCode(String(req.body?.code ?? ''));
+    if (code.length !== REFERRAL_CODE_LENGTH) {
+      res.status(200).json({ status: 'ok', valid: false });
+      return;
+    }
+    try {
+      const db = getDb();
+      const [owner] = await db
+        .select({ name: customer.name })
+        .from(customer)
+        .where(eq(customer.referralCode, code));
+      if (!owner) {
+        res.status(200).json({ status: 'ok', valid: false });
+        return;
+      }
+      res.status(200).json({
+        status: 'ok',
+        valid: true,
+        referrer_first_name: owner.name.trim().split(/\s+/)[0] ?? '',
+      });
+    } catch (err) {
+      console.error('[book:check_referral] failed', err);
+      // Degrade to "no discount" rather than blocking the booking entirely.
+      res.status(200).json({ status: 'ok', valid: false });
+    }
+    return;
+  }
+
   // Validation
   const parsed = bookRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -178,6 +221,19 @@ export default async function handler(
     const isNewCustomer = !existing;
     const customerId = existing?.id ?? crypto.randomUUID();
 
+    // Resolve an inbound referral code. A bad code silently yields no discount —
+    // never block a real booking over it. Self-referral is rejected by comparing
+    // the resolved owner against the booking customer.
+    let referrerId: string | null = null;
+    const inboundCode = normalizeReferralCode(data.referral_code ?? '');
+    if (inboundCode.length === REFERRAL_CODE_LENGTH) {
+      const [owner] = await db
+        .select({ id: customer.id })
+        .from(customer)
+        .where(eq(customer.referralCode, inboundCode));
+      if (owner && owner.id !== customerId) referrerId = owner.id;
+    }
+
     // Prepare the rows (pure — no I/O yet). The inserts run inside the
     // transaction below so a mid-flight failure can't leave orphan rows.
     // Floored to the day before launch (2026-07-23) so pre-orders can't
@@ -214,6 +270,9 @@ export default async function handler(
     }));
     const firstVisitId = visitRows[0]?.id ?? null;
     const tokenPlain = generateMagicLinkToken();
+    // Every customer gets their own shareable code at booking. Generated here
+    // rather than lazily so /manage and the done email can always show one.
+    const newReferralCode = generateReferralCode();
 
     // All booking writes in one transaction: customer (if new) + subscription
     // (if recurring) + visits + magic-link token. If any insert fails, the whole
@@ -234,6 +293,11 @@ export default async function handler(
           binLocation: data.bin_location ?? null,
           stripeCustomerId: verifiedPaymentSetup?.stripeCustomerId ?? null,
           defaultPaymentMethodId: verifiedPaymentSetup?.paymentMethodId ?? null,
+          referralCode: newReferralCode,
+          referredBy: referrerId,
+          // The friend's welcome $5 rides the same balance the referrer's
+          // reward will — one mechanism, spent automatically at Done.
+          creditCents: referrerId ? REFERRAL_REWARD_CENTS : 0,
         });
       } else {
         await tx
@@ -250,6 +314,17 @@ export default async function handler(
               ? {
                   stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
                   defaultPaymentMethodId: verifiedPaymentSetup.paymentMethodId,
+                }
+              : {}),
+            // A returning customer can still be referred by a neighbour — most
+            // repeat business comes through this branch, and without it the
+            // form would promise "$5 off, courtesy of X" and then charge full
+            // price. Guarded on referredBy still being null so nobody can farm
+            // credit by re-booking with a different code each time.
+            ...(referrerId && !existing?.referredBy
+              ? {
+                  referredBy: referrerId,
+                  creditCents: sql`${customer.creditCents} + ${REFERRAL_REWARD_CENTS}`,
                 }
               : {}),
           })

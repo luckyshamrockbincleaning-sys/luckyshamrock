@@ -500,3 +500,170 @@ describe('POST /api/operator/visit/:id/done', () => {
     sessionSpy.mockRestore();
   });
 });
+
+describe('referral credit at Done', () => {
+  async function giveCredit(customerId: string, cents: number) {
+    await getDb().update(customer).set({ creditCents: cents }).where(eq(customer.id, customerId));
+  }
+
+  it('reduces a cash settlement by the balance and spends it', async () => {
+    const c = await seedCustomer();
+    await giveCredit(c, 500); // $5
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+
+    // One-off, 1 bin = $45.00; less $5 credit = $40.00
+    expect(res.body.charge.amount_cents).toBe(4000);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.amountCents).toBe(4000);
+    expect(p!.creditCents).toBe(500);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+
+  it('applies credit on top of the operator discount, never below zero', async () => {
+    const c = await seedCustomer();
+    await giveCredit(c, 100000); // absurd balance
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', discount_cents: 1000 }), res);
+
+    expect(res.body.charge.amount_cents).toBe(0);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    // $45 base − $10 discount = $35 consumed; the rest of the balance survives.
+    expect(after!.creditCents).toBe(100000 - 3500);
+  });
+
+  it('leaves the balance alone when there is none', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.body.charge.amount_cents).toBe(4500);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.creditCents).toBe(0);
+  });
+});
+
+describe('referrer payout', () => {
+  async function seedPair() {
+    const db = getDb();
+    const referrerId = await seedCustomer();
+    const friendId = await seedCustomer();
+    await db.update(customer).set({ referredBy: referrerId }).where(eq(customer.id, friendId));
+    return { referrerId, friendId };
+  }
+
+  it("pays the referrer $5 once the friend's clean is done and paid", async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(500);
+    const [friend] = await getDb().select().from(customer).where(eq(customer.id, friendId));
+    expect(friend!.referralAwardedAt).not.toBeNull();
+  });
+
+  it('never pays twice, even across two separate cleans', async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+    const v2 = await addVisit(friendId, '2026-09-10');
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), mockRes());
+    await handler(await req(true, v2, 'POST', { payment_method: 'cash' }), mockRes());
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(500); // not 1000
+  });
+
+  it('does NOT pay on a fully comped clean — no money changed hands', async () => {
+    const { referrerId, friendId } = await seedPair();
+    const v1 = await addVisit(friendId, '2026-08-10');
+    // Discount exceeding the price comps the visit.
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', discount_cents: 100000 }), mockRes());
+
+    const [ref] = await getDb().select().from(customer).where(eq(customer.id, referrerId));
+    expect(ref!.creditCents).toBe(0);
+    const [friend] = await getDb().select().from(customer).where(eq(customer.id, friendId));
+    expect(friend!.referralAwardedAt).toBeNull();
+  });
+
+  it('does nothing for a customer who was never referred', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.statusCode).toBe(200);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+});
+
+describe('credit is never consumed without a payment record', () => {
+  async function seedWithCredit(cents: number): Promise<string> {
+    const db = getDb();
+    const id = crypto.randomUUID();
+    await db.insert(customer).values({
+      id,
+      email: `cr-${id.slice(0, 8)}@e.com`,
+      name: 'Pat',
+      street: '1 Rd',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L1A1',
+      pickupDay: 'wednesday',
+      creditCents: cents,
+      // Deliberately no stripeCustomerId / defaultPaymentMethodId.
+    });
+    return id;
+  }
+
+  it('leaves the balance intact when nothing is collected (no card on file)', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'card_on_file' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.nothing_collected).toBe(true);
+    expect(await getDb().select().from(payment).where(eq(payment.visitId, v1))).toHaveLength(0);
+
+    // Nobody took money, so the credit must survive for the next clean.
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(500);
+  });
+
+  it('leaves the balance intact when the QR checkout session cannot be created', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+    // Stripe is unconfigured in tests, so createDoorstepCheckoutSession returns
+    // null — the same shape as a live Stripe outage.
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'qr' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.payment_url).toBeNull();
+    expect(await getDb().select().from(payment).where(eq(payment.visitId, v1))).toHaveLength(0);
+
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(500);
+  });
+
+  it('still spends the balance when a payment row IS written (cash)', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+
+    expect(res.body.charge.amount_cents).toBe(4000);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+});

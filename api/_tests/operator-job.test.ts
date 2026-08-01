@@ -338,3 +338,18 @@ describe('POST /api/operator/job (walk-up)', () => {
     });
   });
 });
+
+describe('walk-up customers can refer too', () => {
+  it('issues a referral code to a walk-up customer', async () => {
+    const res = mockRes();
+    await handler(await req(true, validJob), res);
+    expect(res.statusCode).toBe(201);
+
+    const [c] = await getDb().select().from(customer).where(eq(customer.email, 'walkup@example.com'));
+    // Without a code this customer could never refer a neighbour, and the
+    // backfill script only ever runs once at deploy.
+    expect(c!.referralCode).toBeTruthy();
+    expect(c!.referralCode).toHaveLength(6);
+    expect(c!.referralCode).not.toMatch(/[01OIL]/);
+  });
+});

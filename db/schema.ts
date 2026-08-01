@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   index,
   check,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -57,6 +58,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'refund', // customer refund receipt, triggered by the charge.refunded webhook
   'operator_feedback', // internal: a customer left a low-star rating comment
   'receipt', // payment confirmation, triggered by the checkout.session.completed webhook
+  'referral_earned', // a referred friend's first clean was paid; the referrer earned $5
 ]);
 
 // Per-visit billing state (Phase 6 — Stripe).
@@ -104,10 +106,27 @@ export const customer = pgTable(
     // Stripe billing identifiers (Phase 6). Null until the customer saves a card.
     stripeCustomerId: text('stripe_customer_id'),
     defaultPaymentMethodId: text('default_payment_method_id'),
+    // Referral program. `referralCode` is this customer's own shareable code
+    // (nullable: rows predating the feature are backfilled by
+    // db/backfill-referral-codes.ts). `creditCents` is a stacking,
+    // never-expiring balance spent automatically at Done — it holds BOTH the
+    // friend's welcome $5 and any referral $5 they later earn. `referredBy` is
+    // who sent them; `referralAwardedAt` stamps the moment that referrer was
+    // paid, and is the idempotency guard against double payouts.
+    referralCode: text('referral_code'),
+    creditCents: integer('credit_cents').notNull().default(0),
+    // Self-reference needs the callback + explicit return type, otherwise
+    // TypeScript hits a circular inference error on the table it belongs to.
+    // `restrict` matches the rest of the schema: deleting someone who referred
+    // a customer must be deliberate, never a silent cascade.
+    referredBy: uuid('referred_by').references((): AnyPgColumn => customer.id, { onDelete: 'restrict' }),
+    referralAwardedAt: timestamp('referral_awarded_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     emailUnique: unique('customer_email_unique').on(t.email),
+    referralCodeUnique: unique('customer_referral_code_unique').on(t.referralCode),
+    creditNonNegative: check('customer_credit_non_negative', sql`${t.creditCents} >= 0`),
   }),
 );
 
@@ -242,6 +261,10 @@ export const payment = pgTable(
     stripePaymentIntentId: text('stripe_payment_intent_id'),
     amountCents: integer('amount_cents').notNull(),
     discountCents: integer('discount_cents').notNull().default(0),
+    // Referral/goodwill credit consumed by this payment. Recorded so the PDF
+    // receipt line items still add up to the total paid, and so spent credit is
+    // auditable after the fact.
+    creditCents: integer('credit_cents').notNull().default(0),
     currency: varchar('currency', { length: 3 }).notNull().default('cad'),
     status: paymentRecordStatusEnum('status').notNull().default('pending'),
     method: paymentMethodEnum('method').notNull().default('card'),

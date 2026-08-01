@@ -27,6 +27,7 @@ import {
   onOurWayTemplate,
   doneTemplate,
   bookingConfirmedTemplate,
+  referralEarnedTemplate,
   DONE_BEFORE_PHOTO_CID,
   DONE_AFTER_PHOTO_CID,
   DONE_WASH_GIF_CID,
@@ -45,6 +46,7 @@ import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
+import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -137,6 +139,7 @@ const stopColumns = {
   // One-offs store bin_count on the visit; recurring derive it from the
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
+  creditCents: customer.creditCents,
 } as const;
 
 function isActionableVisitStatus(status: string): boolean {
@@ -399,6 +402,10 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
           city: data.city ?? 'Fort Saskatchewan',
           postalCode: normalizePostalCode(data.postal_code),
           pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
+          // Walk-ups get a referral code like anyone else. Without this they
+          // are permanently unable to refer a neighbour — the backfill script
+          // is a one-off at deploy and never sees rows created after it.
+          referralCode: generateReferralCode(),
         });
       }
 
@@ -589,6 +596,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         postalCode: customer.postalCode,
         stripeCustomerId: customer.stripeCustomerId,
         defaultPaymentMethodId: customer.defaultPaymentMethodId,
+        referralCode: customer.referralCode,
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
@@ -662,6 +670,20 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // below, which must show a line item that agrees with the total) use the
     // same effective per-service amount.
     const effectiveBaseCents = paymentParsed.data.amount_cents ?? baseCents;
+    // Referral/goodwill credit applies AFTER the operator's discount and before
+    // any money is taken, on EVERY settlement path — a customer paying cash must
+    // not silently forfeit their balance. Reserved (decremented) up front so a
+    // later Stripe decline can't hand out the same credit twice; the reduced
+    // figure is what lands on the payment row, so a retry re-charges correctly.
+    const afterDiscountCents = finalChargeCents(effectiveBaseCents, discountCents);
+    const creditAppliedCents = alreadyBilled
+      ? 0
+      : await spendCredit(db, row.customerId, afterDiscountCents);
+    // Reserved credit is only truly spent once a payment row exists to account
+    // for it. Several paths below can bail without writing one (no card on
+    // file, Stripe unable to create a QR session) — each committing branch
+    // flips this, and anything left reserved is handed back afterwards.
+    let creditCommitted = false;
     // Doorstep settlement: the operator collected in person. No Stripe call —
     // the money is already in hand (cash) or captured in the Stripe app
     // (terminal, reconciled there by amount/time).
@@ -669,7 +691,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // The visit completes now and the money confirms asynchronously via the
     // checkout.session.completed webhook.
     if (!alreadyBilled && paymentMethod === 'qr') {
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
       const session = await createDoorstepCheckoutSession({
         visitId,
         amountCents: amount,
@@ -691,13 +713,15 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: amount,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'pending',
           method: 'qr',
         });
+        creditCommitted = true;
         charge = { attempted: true, ok: true, amount_cents: amount };
       }
     } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
       const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
       await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
       await db.insert(payment).values({
@@ -706,15 +730,17 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         visitId,
         amountCents: amount,
         discountCents,
+        creditCents: creditAppliedCents,
         status: 'succeeded',
         method: paymentMethod,
       });
+      creditCommitted = true;
       charge = { attempted: true, ok: true, amount_cents: amount };
     } else if (!alreadyBilled && paymentMethod === 'card_on_file' && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
       // B3: the /ops amount field is editable for card_on_file too — an
       // operator who types $30 and leaves the default payment method must
       // charge $30, not the standard price.
-      const amount = finalChargeCents(effectiveBaseCents, discountCents);
+      const amount = afterDiscountCents - creditAppliedCents;
 
       if (amount <= 0) {
         // Fully discounted → comp it, no Stripe call.
@@ -725,8 +751,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: 0,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'succeeded',
         });
+        creditCommitted = true;
         charge = { attempted: true, ok: true, amount_cents: 0 };
       } else {
         charge.attempted = true;
@@ -741,8 +769,13 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           visitId,
           amountCents: amount,
           discountCents,
+          creditCents: creditAppliedCents,
           status: 'pending',
         });
+        // The pending row exists and records the credit, so it is accounted
+        // for even if the charge below declines — the retry re-charges this
+        // already-reduced amount rather than the full price.
+        creditCommitted = true;
         const result = await chargeOffSession({
           stripeCustomerId: row.stripeCustomerId,
           paymentMethodId: row.defaultPaymentMethodId,
@@ -764,6 +797,50 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
           .where(eq(visit.id, visitId));
         charge = { attempted: true, ok: result.ok, amount_cents: amount, error: result.ok ? undefined : result.error };
+      }
+    }
+
+    // Hand back anything reserved that no payment row ended up accounting for.
+    // Without this a customer with no card on file, or one whose QR session
+    // Stripe failed to create, silently loses their balance for a clean nobody
+    // was ever charged for.
+    if (creditAppliedCents > 0 && !creditCommitted) {
+      try {
+        await releaseCredit(db, row.customerId, creditAppliedCents);
+      } catch (err) {
+        console.error('[operator/visit/done] credit release failed', err);
+      }
+    }
+
+    // Pay the referrer only when money actually moved on this clean. A comped
+    // clean and an unscanned QR are both excluded — QR is awarded later by the
+    // checkout.session.completed webhook, once the customer has really paid.
+    // Best-effort: a failure here must never break a completed clean.
+    const settledForReferral =
+      charge.attempted && charge.ok && (charge.amount_cents ?? 0) > 0 && paymentMethod !== 'qr';
+    if (settledForReferral) {
+      try {
+        const award = await awardReferralIfEarned(db, row.customerId);
+        if (award.awarded && award.referrerId) {
+          const [ref] = await db
+            .select({ email: customer.email, name: customer.name, creditCents: customer.creditCents })
+            .from(customer)
+            .where(eq(customer.id, award.referrerId));
+          if (ref && !isPlaceholderEmail(ref.email)) {
+            const refTpl = referralEarnedTemplate({ name: ref.name, creditCents: ref.creditCents });
+            await sendAndLog({
+              kind: 'referral_earned',
+              to: ref.email,
+              subject: refTpl.subject,
+              body: refTpl.text,
+              html: refTpl.html,
+              customerId: award.referrerId,
+              visitId,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[operator/visit/done] referral award failed (clean unaffected)', err);
       }
     }
 
@@ -902,6 +979,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           // item minus the discount always agrees with TOTAL PAID below.
           baseCents: effectiveBaseCents,
           discountCents,
+          creditCents: creditAppliedCents,
           totalCents: charge.amount_cents ?? 0,
           outcome:
             paymentMethod === 'cash'
@@ -938,6 +1016,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       hasWashGif,
       extraBins,
       ratingBaseUrl,
+      // Ask for the referral while the clean bin is still in front of them.
+      // Renders below the star row so the Google-review funnel stays first.
+      referral: row.referralCode
+        ? { code: row.referralCode, shareUrl: `${siteUrl}/?ref=${encodeURIComponent(row.referralCode)}` }
+        : undefined,
       charge: emailCharge,
     });
     const result = isPlaceholderEmail(row.email)
@@ -1188,6 +1271,11 @@ export async function handleRetry(req: VercelRequest, res: VercelResponse): Prom
       .limit(1);
     let amount = lastFailed?.amountCents ?? null;
     let discount = lastFailed?.discountCents ?? 0;
+    // Carry the credit attribution onto the retry row. The amount above is
+    // already credit-reduced, so the customer is never re-charged for it — but
+    // without this the succeeded row would report zero credit consumed and any
+    // reconciliation reading from it would under-count.
+    const carriedCredit = lastFailed?.creditCents ?? 0;
     if (amount === null) {
       let cadence: Cadence | null = null;
       let binCount = row.visitBinCount ?? 1;
@@ -1207,6 +1295,7 @@ export async function handleRetry(req: VercelRequest, res: VercelResponse): Prom
       visitId,
       amountCents: amount,
       discountCents: discount,
+      creditCents: carriedCredit,
       status: 'pending',
     });
     const result = await chargeOffSession({

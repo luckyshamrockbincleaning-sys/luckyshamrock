@@ -78,6 +78,13 @@
       "when": 1785014998207,
       "tag": "0010_heavy_darwin",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785518854369,
+      "tag": "0011_lumpy_squadron_sinister",
+      "breakpoints": true
     }
   ]
 }

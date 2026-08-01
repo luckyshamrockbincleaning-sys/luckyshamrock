@@ -216,3 +216,33 @@ describe('GET /api/me', () => {
     }
   });
 });
+
+describe('GET /api/me — referral', () => {
+  it('returns the referral code, balance and referred count', async () => {
+    const db = getDb();
+    const referrerId = await makeCustomer();
+    await db.update(customer)
+      .set({ referralCode: 'K7M2QX', creditCents: 500 })
+      .where(eq(customer.id, referrerId));
+
+    // One friend they referred.
+    const friendId = await makeCustomer();
+    await db.update(customer).set({ referredBy: referrerId }).where(eq(customer.id, friendId));
+
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(referrerId), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.referral.code).toBe('K7M2QX');
+    expect(res.body.referral.credit_cents).toBe(500);
+    expect(res.body.referral.referred_count).toBe(1);
+  });
+
+  it('reports a zero balance and no referrals for a fresh customer', async () => {
+    const id = await makeCustomer();
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+    expect(res.body.referral.credit_cents).toBe(0);
+    expect(res.body.referral.referred_count).toBe(0);
+  });
+});

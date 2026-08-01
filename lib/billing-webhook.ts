@@ -2,8 +2,12 @@ import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, visit, payment } from '../db/schema.js';
 import { sendAndLog } from './notifications.js';
-import { refundTemplate, receiptTemplate } from './email/templates.js';
+import { refundTemplate, receiptTemplate, referralEarnedTemplate } from './email/templates.js';
 import { isPlaceholderEmail } from './walkup-email.js';
+// Import from lib/referral.ts, never lib/operator-handlers.ts — the latter
+// would drag sharp + gifenc + the ~947 KB sprite module into this webhook's
+// serverless bundle. Same reason lib/walkup-email.ts exists.
+import { awardReferralIfEarned } from './referral.js';
 
 /**
  * Applies a verified Stripe event to our DB. Kept separate from the HTTP handler
@@ -186,6 +190,32 @@ export async function applyStripeEvent(event: {
         }
       } catch (err) {
         console.error('[billing-webhook] receipt email failed (ledger already updated)', err);
+      }
+
+      // A QR payment is the one settlement path that confirms asynchronously,
+      // so this is where a referrer earns their reward for it — handleDone
+      // deliberately skipped the award at Done time because no money had moved
+      // yet. awardReferralIfEarned is idempotent on referral_awarded_at, so a
+      // Stripe redelivery of this event cannot pay the referrer twice.
+      try {
+        const award = await awardReferralIfEarned(db, p.customerId);
+        if (award.awarded && award.referrerId) {
+          const [ref] = await db.select().from(customer).where(eq(customer.id, award.referrerId));
+          if (ref && !isPlaceholderEmail(ref.email)) {
+            const refTpl = referralEarnedTemplate({ name: ref.name, creditCents: ref.creditCents });
+            await sendAndLog({
+              kind: 'referral_earned',
+              to: ref.email,
+              subject: refTpl.subject,
+              body: refTpl.text,
+              html: refTpl.html,
+              customerId: award.referrerId,
+              visitId: p.visitId,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[billing-webhook] referral award failed (payment already applied)', err);
       }
 
       return 'checkout.session.completed:applied';

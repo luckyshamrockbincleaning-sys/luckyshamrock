@@ -59,6 +59,10 @@ export const bookRequestSchema = z
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
     payment_setup: paymentSetup.optional(),
+    // Deliberately unvalidated beyond a length bound: an unknown or malformed
+    // code must degrade to "no discount", never reject an otherwise-valid
+    // booking. Resolution happens in api/book.ts.
+    referral_code: z.string().trim().max(32).optional(),
   })
   .refine(
     (data) => (data.plan === 'oneoff' ? data.oneoff_date !== undefined : data.oneoff_date === undefined),
