@@ -76,6 +76,24 @@ export async function spendCredit(db: Db, customerId: string, maxCents: number):
 }
 
 /**
+ * Give back credit that was reserved but never actually spent.
+ *
+ * Credit has to be reserved BEFORE the settlement amount is computed (the
+ * amount depends on it, and a QR checkout session has to be created for that
+ * exact figure). But several paths can then fail to record any payment at all:
+ * no card on file, Stripe unable to create the session. Without this, the
+ * customer's balance would be silently consumed for a clean nobody was
+ * charged for. Callers release whenever no payment row was written.
+ */
+export async function releaseCredit(db: Db, customerId: string, cents: number): Promise<void> {
+  if (cents <= 0) return;
+  await db
+    .update(customer)
+    .set({ creditCents: sql`${customer.creditCents} + ${cents}` })
+    .where(eq(customer.id, customerId));
+}
+
+/**
  * Pay a referrer, exactly once, for a friend whose first clean just settled.
  *
  * Called from TWO places — handleDone (card/cash/terminal settle synchronously)

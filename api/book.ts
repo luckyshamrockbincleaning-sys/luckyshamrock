@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, magicLinkToken } from '../db/schema.js';
@@ -314,6 +314,17 @@ export default async function handler(
               ? {
                   stripeCustomerId: verifiedPaymentSetup.stripeCustomerId,
                   defaultPaymentMethodId: verifiedPaymentSetup.paymentMethodId,
+                }
+              : {}),
+            // A returning customer can still be referred by a neighbour — most
+            // repeat business comes through this branch, and without it the
+            // form would promise "$5 off, courtesy of X" and then charge full
+            // price. Guarded on referredBy still being null so nobody can farm
+            // credit by re-booking with a different code each time.
+            ...(referrerId && !existing?.referredBy
+              ? {
+                  referredBy: referrerId,
+                  creditCents: sql`${customer.creditCents} + ${REFERRAL_REWARD_CENTS}`,
                 }
               : {}),
           })

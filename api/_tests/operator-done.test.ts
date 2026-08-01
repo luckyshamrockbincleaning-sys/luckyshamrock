@@ -605,3 +605,65 @@ describe('referrer payout', () => {
     expect(after!.creditCents).toBe(0);
   });
 });
+
+describe('credit is never consumed without a payment record', () => {
+  async function seedWithCredit(cents: number): Promise<string> {
+    const db = getDb();
+    const id = crypto.randomUUID();
+    await db.insert(customer).values({
+      id,
+      email: `cr-${id.slice(0, 8)}@e.com`,
+      name: 'Pat',
+      street: '1 Rd',
+      city: 'Fort Saskatchewan',
+      postalCode: 'T8L1A1',
+      pickupDay: 'wednesday',
+      creditCents: cents,
+      // Deliberately no stripeCustomerId / defaultPaymentMethodId.
+    });
+    return id;
+  }
+
+  it('leaves the balance intact when nothing is collected (no card on file)', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'card_on_file' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.nothing_collected).toBe(true);
+    expect(await getDb().select().from(payment).where(eq(payment.visitId, v1))).toHaveLength(0);
+
+    // Nobody took money, so the credit must survive for the next clean.
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(500);
+  });
+
+  it('leaves the balance intact when the QR checkout session cannot be created', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+    // Stripe is unconfigured in tests, so createDoorstepCheckoutSession returns
+    // null — the same shape as a live Stripe outage.
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'qr' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.payment_url).toBeNull();
+    expect(await getDb().select().from(payment).where(eq(payment.visitId, v1))).toHaveLength(0);
+
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(500);
+  });
+
+  it('still spends the balance when a payment row IS written (cash)', async () => {
+    const c = await seedWithCredit(500);
+    const v1 = await addVisit(c, '2026-08-10');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+
+    expect(res.body.charge.amount_cents).toBe(4000);
+    const [after] = await getDb().select().from(customer).where(eq(customer.id, c));
+    expect(after!.creditCents).toBe(0);
+  });
+});

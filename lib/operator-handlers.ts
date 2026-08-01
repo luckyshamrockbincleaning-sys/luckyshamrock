@@ -46,7 +46,7 @@ import type { Cadence } from './schedule.js';
 import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
-import { spendCredit, awardReferralIfEarned } from './referral.js';
+import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -402,6 +402,10 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
           city: data.city ?? 'Fort Saskatchewan',
           postalCode: normalizePostalCode(data.postal_code),
           pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
+          // Walk-ups get a referral code like anyone else. Without this they
+          // are permanently unable to refer a neighbour — the backfill script
+          // is a one-off at deploy and never sees rows created after it.
+          referralCode: generateReferralCode(),
         });
       }
 
@@ -675,6 +679,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     const creditAppliedCents = alreadyBilled
       ? 0
       : await spendCredit(db, row.customerId, afterDiscountCents);
+    // Reserved credit is only truly spent once a payment row exists to account
+    // for it. Several paths below can bail without writing one (no card on
+    // file, Stripe unable to create a QR session) — each committing branch
+    // flips this, and anything left reserved is handed back afterwards.
+    let creditCommitted = false;
     // Doorstep settlement: the operator collected in person. No Stripe call —
     // the money is already in hand (cash) or captured in the Stripe app
     // (terminal, reconciled there by amount/time).
@@ -708,6 +717,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           status: 'pending',
           method: 'qr',
         });
+        creditCommitted = true;
         charge = { attempted: true, ok: true, amount_cents: amount };
       }
     } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
@@ -724,6 +734,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         status: 'succeeded',
         method: paymentMethod,
       });
+      creditCommitted = true;
       charge = { attempted: true, ok: true, amount_cents: amount };
     } else if (!alreadyBilled && paymentMethod === 'card_on_file' && isStripeConfigured() && row.stripeCustomerId && row.defaultPaymentMethodId) {
       // B3: the /ops amount field is editable for card_on_file too — an
@@ -743,6 +754,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           creditCents: creditAppliedCents,
           status: 'succeeded',
         });
+        creditCommitted = true;
         charge = { attempted: true, ok: true, amount_cents: 0 };
       } else {
         charge.attempted = true;
@@ -760,6 +772,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           creditCents: creditAppliedCents,
           status: 'pending',
         });
+        // The pending row exists and records the credit, so it is accounted
+        // for even if the charge below declines — the retry re-charges this
+        // already-reduced amount rather than the full price.
+        creditCommitted = true;
         const result = await chargeOffSession({
           stripeCustomerId: row.stripeCustomerId,
           paymentMethodId: row.defaultPaymentMethodId,
@@ -781,6 +797,18 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           .set({ paymentStatus: result.ok ? 'charged' : 'failed' })
           .where(eq(visit.id, visitId));
         charge = { attempted: true, ok: result.ok, amount_cents: amount, error: result.ok ? undefined : result.error };
+      }
+    }
+
+    // Hand back anything reserved that no payment row ended up accounting for.
+    // Without this a customer with no card on file, or one whose QR session
+    // Stripe failed to create, silently loses their balance for a clean nobody
+    // was ever charged for.
+    if (creditAppliedCents > 0 && !creditCommitted) {
+      try {
+        await releaseCredit(db, row.customerId, creditAppliedCents);
+      } catch (err) {
+        console.error('[operator/visit/done] credit release failed', err);
       }
     }
 
@@ -1243,6 +1271,11 @@ export async function handleRetry(req: VercelRequest, res: VercelResponse): Prom
       .limit(1);
     let amount = lastFailed?.amountCents ?? null;
     let discount = lastFailed?.discountCents ?? 0;
+    // Carry the credit attribution onto the retry row. The amount above is
+    // already credit-reduced, so the customer is never re-charged for it — but
+    // without this the succeeded row would report zero credit consumed and any
+    // reconciliation reading from it would under-count.
+    const carriedCredit = lastFailed?.creditCents ?? 0;
     if (amount === null) {
       let cadence: Cadence | null = null;
       let binCount = row.visitBinCount ?? 1;
@@ -1262,6 +1295,7 @@ export async function handleRetry(req: VercelRequest, res: VercelResponse): Prom
       visitId,
       amountCents: amount,
       discountCents: discount,
+      creditCents: carriedCredit,
       status: 'pending',
     });
     const result = await chargeOffSession({
