@@ -332,6 +332,30 @@ export function referralEarnedTemplate(p: { name: string; creditCents: number })
   return { subject, html, text };
 }
 
+/**
+ * Spring: the cleaning season has reopened and the customer's plan is running
+ * again. Sent once per subscriber when the operator opens the season, so the
+ * winter gap ends with a message rather than a truck appearing unannounced.
+ */
+export function seasonStartTemplate(p: { name: string; firstVisitDate: string; manageUrl?: string | null }): RenderedEmail {
+  const subject = `We're back — your first clean is ${p.firstVisitDate}`;
+  const text =
+    `Hi ${p.name},\n\n` +
+    `The cleaning season is open again and your plan has picked up where it left off.\n\n` +
+    `Your first clean of the season: ${p.firstVisitDate}.\n\n` +
+    (p.manageUrl ? `Need a different day? Change it here: ${p.manageUrl}\n\n` : '') +
+    FOOTER_TEXT;
+  const html = brandWrap(
+    `<p>Hi ${escapeHtml(p.name)},</p>` +
+    `<p>The cleaning season is open again 🍀 — your plan has picked up right where it left off.</p>` +
+    `<p>Your first clean of the season is <strong>${escapeHtml(p.firstVisitDate)}</strong>.</p>` +
+    (p.manageUrl
+      ? `<p><a href="${escapeAttr(p.manageUrl)}" style="color:#1d7a3d;font-weight:bold">Need a different day? Change it here →</a></p>`
+      : ''),
+  );
+  return { subject, html, text };
+}
+
 export function receiptTemplate(p: { name: string; amountCents: number }): RenderedEmail {
   const subject = `Payment received — ${formatCad(p.amountCents)}`;
   const text =

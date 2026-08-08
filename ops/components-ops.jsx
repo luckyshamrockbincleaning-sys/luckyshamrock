@@ -754,6 +754,58 @@ function AttentionCard({ item, onAction, busy }) {
   );
 }
 
+// Spring restart. Bookings stop at Oct 31; this books the new season for every
+// active plan and emails those customers. Lives behind a confirm because it
+// touches every subscriber at once — though it is safe to run twice (a plan
+// that already has visits this season is skipped, and the email is idempotent).
+function SeasonOpenCard() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState('');
+
+  async function open() {
+    if (busy) return;
+    if (!window.confirm(
+      'Open the new cleaning season?\n\nThis books visits for every active plan and emails those customers that we are back. Safe to run more than once.',
+    )) return;
+    setBusy(true);
+    setResult('');
+    try {
+      const r = await fetch('/api/operator/season', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.message || `${r.status}`);
+      setResult(
+        b.visits_created > 0
+          ? `Season opened — ${b.visits_created} cleans booked across ${b.subscriptions_opened} plan(s). Customers emailed.`
+          : `Nothing to book — all ${b.subscriptions_opened} active plan(s) already have this season's cleans.`,
+      );
+    } catch (e) {
+      setResult(`Could not open the season: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="ops-card" style={{ marginBottom: 12 }}>
+      <h2 style={{ marginTop: 0, fontSize: 17 }}>Start of season</h2>
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        Cleaning runs May 1 – Oct 31. Tap this in the spring once the ground has
+        thawed — it books the new season for every active plan and emails those
+        customers.
+      </p>
+      <button className="btn btn-primary ops-btn" disabled={busy} onClick={open}>
+        {busy ? 'Opening…' : 'Open the new season'}
+      </button>
+      {result && <div style={{ marginTop: 10, fontSize: 13 }}>{result}</div>}
+    </div>
+  );
+}
+
 function OpsApp() {
   const [authed, setAuthed] = useState(null); // null = unknown, true, false
   const [view, setView] = useState('today'); // 'today' | 'upcoming' | 'attention'
@@ -962,6 +1014,8 @@ function OpsApp() {
       </div>
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
+
+      {view === 'history' && <SeasonOpenCard />}
 
       {view === 'today' && (
         <NewJobCard

@@ -59,6 +59,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'operator_feedback', // internal: a customer left a low-star rating comment
   'receipt', // payment confirmation, triggered by the checkout.session.completed webhook
   'referral_earned', // a referred friend's first clean was paid; the referrer earned $5
+  'season_start', // spring: the cleaning season has reopened and visits are booked
 ]);
 
 // Per-visit billing state (Phase 6 — Stripe).

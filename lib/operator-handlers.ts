@@ -28,6 +28,7 @@ import {
   doneTemplate,
   bookingConfirmedTemplate,
   referralEarnedTemplate,
+  seasonStartTemplate,
   DONE_BEFORE_PHOTO_CID,
   DONE_AFTER_PHOTO_CID,
   DONE_WASH_GIF_CID,
@@ -47,6 +48,8 @@ import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
+import { isInSeason, seasonEnd } from './season.js';
+import { generateVisitDates, type PickupDay } from './schedule.js';
 import QRCode from 'qrcode';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -468,6 +471,129 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     });
   } catch (err) {
     console.error('[operator/job] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/season  → open the new cleaning season
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * Spring restart. Every active subscription had its schedule stop at Oct 31;
+ * this books the new season and tells each customer we're back.
+ *
+ * Operator-triggered rather than a cron for two reasons: Vercel Hobby is at
+ * 12/12 functions so a cron endpoint cannot exist, and Shea should decide when
+ * the ground has actually thawed — May 1 on the calendar is not always May 1
+ * in Fort Saskatchewan.
+ *
+ * Safe to run repeatedly. A subscription that already has visits this season is
+ * skipped, and the email is idempotent on (visit_id, kind) through sendAndLog,
+ * so a nervous double-tap in April costs nothing.
+ */
+export async function handleSeasonStart(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  try {
+    const db = getDb();
+    const now = new Date();
+    const cutoff = seasonEnd(now);
+
+    const subs = await db
+      .select({
+        subId: subscription.id,
+        cadence: subscription.cadence,
+        customerId: customer.id,
+        email: customer.email,
+        name: customer.name,
+        pickupDay: customer.pickupDay,
+      })
+      .from(subscription)
+      .innerJoin(customer, eq(customer.id, subscription.customerId))
+      .where(eq(subscription.status, 'active'));
+
+    let opened = 0;
+    let created = 0;
+
+    for (const sub of subs) {
+      // Already has work booked inside the current season → nothing to do.
+      const existing = await db
+        .select({ id: visit.id })
+        .from(visit)
+        .where(
+          and(
+            eq(visit.subscriptionId, sub.subId),
+            eq(visit.status, 'scheduled'),
+            gt(visit.scheduledFor, now),
+          ),
+        );
+      if (existing.length > 0) {
+        opened++;
+        continue;
+      }
+
+      // Generate a full run and keep only what fits in this season.
+      const dates = generateVisitDates({
+        startDate: now,
+        pickupDay: sub.pickupDay as PickupDay,
+        cadence: sub.cadence as Cadence,
+        count: 12,
+      }).filter((d) => isInSeason(d) && d <= cutoff);
+
+      if (dates.length === 0) {
+        // Called outside the season, or too late in it to fit a clean.
+        opened++;
+        continue;
+      }
+
+      const rows = dates.map((scheduledFor) => ({
+        id: crypto.randomUUID(),
+        customerId: sub.customerId,
+        subscriptionId: sub.subId,
+        scheduledFor,
+      }));
+      await db.insert(visit).values(rows);
+      created += rows.length;
+      opened++;
+
+      // Best-effort: a failed email must not stop the rest of the route being
+      // opened. Idempotent on (first visit, 'season_start').
+      try {
+        if (!isPlaceholderEmail(sub.email)) {
+          const tpl = seasonStartTemplate({
+            name: sub.name,
+            firstVisitDate: formatFriendlyDate(rows[0]!.scheduledFor.toISOString().slice(0, 10)),
+            manageUrl: `${process.env.SITE_URL ?? 'https://www.luckyshamrock.ca'}/manage`,
+          });
+          await sendAndLog({
+            kind: 'season_start',
+            to: sub.email,
+            subject: tpl.subject,
+            body: tpl.text,
+            html: tpl.html,
+            customerId: sub.customerId,
+            visitId: rows[0]!.id,
+          });
+        }
+      } catch (err) {
+        console.error('[operator/season] season-start email failed', err);
+      }
+    }
+
+    res.status(200).json({
+      status: 'ok',
+      subscriptions_opened: opened,
+      visits_created: created,
+      in_season: isInSeason(now),
+    });
+  } catch (err) {
+    console.error('[operator/season] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }

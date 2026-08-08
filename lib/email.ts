@@ -16,7 +16,8 @@ export type EmailKind =
   | 'refund'
   | 'operator_feedback'
   | 'receipt'
-  | 'referral_earned';
+  | 'referral_earned'
+  | 'season_start';
 
 export interface SendEmailInput {
   kind: EmailKind;
