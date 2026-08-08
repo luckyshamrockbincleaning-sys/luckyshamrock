@@ -298,7 +298,12 @@ function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
   );
 }
 
-function VisitsCard({ visits, onSkip, busyVisitId }) {
+function VisitsCard({ visits, onSkip, onReschedule, busyVisitId }) {
+  // Which visit currently has its date picker open, and what's typed in it.
+  const [editing, setEditing] = useState(null);
+  const [draftDate, setDraftDate] = useState('');
+  const [err, setErr] = useState('');
+
   if (!visits || visits.length === 0) {
     return (
       <div className="manage-card">
@@ -307,21 +312,82 @@ function VisitsCard({ visits, onSkip, busyVisitId }) {
       </div>
     );
   }
+
+  // The season, mirrored from lib/season.ts. Bounding the picker means a
+  // customer can't pick a winter date and get rejected after the fact.
+  const now = new Date();
+  const seasonYear = now.getMonth() + 1 > 10 ? now.getFullYear() + 1 : now.getFullYear();
+  const todayISO = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const seasonOpen = `${seasonYear}-05-01`;
+  const minDate = todayISO > seasonOpen ? todayISO : seasonOpen;
+  const maxDate = `${seasonYear}-10-31`;
+
+  async function save(visitId) {
+    setErr('');
+    if (!draftDate) return;
+    const message = await onReschedule(visitId, draftDate);
+    if (message) { setErr(message); return; }
+    setEditing(null);
+    setDraftDate('');
+  }
+
   return (
     <div className="manage-card">
       <h2>Upcoming visits</h2>
       {visits.map((v) => (
-        <div className="visit-row" key={v.id}>
-          <div>
-            <div className="visit-date">{formatDate(v.scheduled_for)}</div>
-            <div className="muted" style={{marginTop: 2}}><span className={`visit-status ${v.status}`}>{v.status}</span></div>
+        <div key={v.id}>
+          <div className="visit-row">
+            <div>
+              <div className="visit-date">{formatDate(v.scheduled_for)}</div>
+              <div className="muted" style={{marginTop: 2}}><span className={`visit-status ${v.status}`}>{v.status}</span></div>
+            </div>
+            {v.status === 'scheduled' && (
+              <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end'}}>
+                <button
+                  className="btn btn-ghost"
+                  disabled={busyVisitId === v.id}
+                  onClick={() => {
+                    setErr('');
+                    setEditing(editing === v.id ? null : v.id);
+                    setDraftDate(v.scheduled_for.slice(0, 10));
+                  }}
+                >
+                  {editing === v.id ? 'Close' : 'Change date'}
+                </button>
+                <button className="btn btn-skip" disabled={busyVisitId === v.id} onClick={() => onSkip(v.id, !v.subscription_id)}>
+                  {busyVisitId === v.id
+                    ? (v.subscription_id ? 'Skipping…' : 'Cancelling…')
+                    : (v.subscription_id ? 'Skip this one' : 'Cancel this visit')}
+                </button>
+              </div>
+            )}
           </div>
-          {v.status === 'scheduled' && (
-            <button className="btn btn-skip" disabled={busyVisitId === v.id} onClick={() => onSkip(v.id, !v.subscription_id)}>
-              {busyVisitId === v.id
-                ? (v.subscription_id ? 'Skipping…' : 'Cancelling…')
-                : (v.subscription_id ? 'Skip this one' : 'Cancel this visit')}
-            </button>
+
+          {editing === v.id && (
+            <div style={{padding: '10px 0 14px'}}>
+              <label htmlFor={`d-${v.id}`} style={{display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6}}>
+                Pick a new day for this clean
+              </label>
+              <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+                <input
+                  id={`d-${v.id}`}
+                  type="date"
+                  value={draftDate}
+                  min={minDate}
+                  max={maxDate}
+                  onChange={(e) => setDraftDate(e.target.value)}
+                  style={{padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15}}
+                />
+                <button className="btn btn-primary" disabled={busyVisitId === v.id || !draftDate} onClick={() => save(v.id)}>
+                  {busyVisitId === v.id ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {err && <div style={{color: '#7A2222', fontSize: 13, marginTop: 6}}>{err}</div>}
+              <div style={{fontSize: 12, color: 'var(--ink-3, #6b6b6b)', marginTop: 6}}>
+                We clean May through October, and never on a Sunday. Only this
+                visit moves — the rest of your schedule stays put.
+              </div>
+            </div>
           )}
         </div>
       ))}
@@ -466,6 +532,30 @@ function ManageApp() {
     return json;
   }
 
+  // Move one clean to a different day. Returns an error message on failure so
+  // the row can show it inline (a page-level flash would scroll out of view on
+  // a phone, which is where most of these edits happen).
+  async function onReschedule(visitId, date) {
+    setBusyVisitId(visitId);
+    try {
+      const r = await fetch('/api/me', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'reschedule', visit_id: visitId, date }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) return body.message || 'Could not move that clean.';
+      setFlash({ kind: 'ok', text: `Moved to ${formatDate(body.scheduled_for)}.` });
+      await load();
+      return '';
+    } catch (e) {
+      return 'Network error — try again.';
+    } finally {
+      setBusyVisitId(null);
+    }
+  }
+
   async function onSkip(visitId, isOneoff) {
     if (isOneoff && !confirm('Cancel this visit? This one-off booking will be removed.')) return;
     setBusyVisitId(visitId);
@@ -563,7 +653,12 @@ function ManageApp() {
               busy={busy}
             />
           )}
-          <VisitsCard visits={state.me.upcoming_visits} onSkip={onSkip} busyVisitId={busyVisitId} />
+          <VisitsCard
+            visits={state.me.upcoming_visits}
+            onSkip={onSkip}
+            onReschedule={onReschedule}
+            busyVisitId={busyVisitId}
+          />
           <PastVisitsCard visits={state.me.past_visits} />
           <ReferralCard referral={state.me.referral} />
           {state.me.billing_enabled && (

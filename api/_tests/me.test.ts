@@ -352,3 +352,93 @@ describe('GET /api/me — seasonal top-up', () => {
     }
   });
 });
+
+describe('POST /api/me {op:reschedule} — change a clean date', () => {
+  async function seedVisit(customerId: string, iso: string, status = 'scheduled') {
+    const id = crypto.randomUUID();
+    await getDb().insert(visit).values({
+      id, customerId, subscriptionId: null, binCount: 1,
+      scheduledFor: new Date(`${iso}T12:00:00Z`), status: status as any,
+    });
+    return id;
+  }
+  async function post(customerId: string, body: Record<string, unknown>) {
+    const token = await signSessionCookie(customerId);
+    return {
+      method: 'POST', query: {}, body,
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+    } as any;
+  }
+
+  it('moves a visit to the requested date', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-08-13');
+
+    const res = mockResWithHeaders();
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-08-21' }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.scheduled_for).toBe('2026-08-21');
+    const [row] = await getDb().select().from(visit).where(eq(visit.id, v));
+    expect(row!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-08-21');
+  });
+
+  it('refuses a date outside the cleaning season', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-08-13');
+
+    const res = mockResWithHeaders();
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-12-03' }), res);
+
+    expect(res.statusCode).toBe(422);
+    expect(res.body.status).toBe('out_of_season');
+    const [row] = await getDb().select().from(visit).where(eq(visit.id, v));
+    expect(row!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-08-13');
+  });
+
+  it('refuses a date in the past', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-09-10');
+    const res = mockResWithHeaders();
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2020-06-01' }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('refuses a Sunday, matching the booking rules', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-09-10');
+    // 2026-09-13 is a Sunday.
+    const res = mockResWithHeaders();
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-09-13' }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("refuses to move another customer's visit", async () => {
+    const mine = await makeCustomer();
+    const theirs = await makeCustomer();
+    const v = await seedVisit(theirs, '2026-09-10');
+
+    const res = mockResWithHeaders();
+    await handler(await post(mine, { op: 'reschedule', visit_id: v, date: '2026-09-17' }), res);
+
+    expect(res.statusCode).toBe(422);
+    const [row] = await getDb().select().from(visit).where(eq(visit.id, v));
+    expect(row!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-09-10');
+  });
+
+  it('refuses to move a clean that already happened', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-08-13', 'done');
+    const res = mockResWithHeaders();
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-09-17' }), res);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('requires a session', async () => {
+    const res = mockResWithHeaders();
+    await handler({ method: 'POST', query: {}, headers: {},
+      body: { op: 'reschedule', visit_id: crypto.randomUUID(), date: '2026-09-17' } } as any, res);
+    expect(res.statusCode).toBe(401);
+  });
+});

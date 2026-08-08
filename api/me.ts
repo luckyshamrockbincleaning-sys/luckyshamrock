@@ -15,6 +15,23 @@ import { isStripeConfigured } from '../lib/stripe.js';
 // past a dozen — the done emails remain the full archive.
 const PAST_VISIT_LIMIT = 12;
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Parse YYYY-MM-DD at UTC noon, rejecting non-dates that match the regex. */
+function parseDateOnlyUtcNoon(value: string): Date | null {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+function todayUtcNoon(): Date {
+  const n = new Date();
+  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), 12, 0, 0));
+}
+
 const FUTURE_VISIT_TARGET: Record<Cadence, number> = {
   monthly: 12,
   bimonthly: 6,
@@ -47,6 +64,67 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const customerId = await getSessionCustomerId(req);
   if (!customerId) {
     res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+
+  // POST /api/me {op:'reschedule'} → move one clean to a different day.
+  //
+  // Folded into this route rather than a new file: the project is at 12/12
+  // Vercel Hobby functions, and api/visit/[id]/skip.ts cannot host it because
+  // its path segment is literally "skip". Same reason logout and card setup
+  // live here.
+  //
+  // Deliberately moves ONLY the named visit. A recurring customer changing one
+  // awkward date does not want their whole year shifted; the rest of the
+  // schedule keeps its rhythm.
+  if (req.method === 'POST' && req.body?.op === 'reschedule') {
+    const visitId = typeof req.body?.visit_id === 'string' ? req.body.visit_id : '';
+    const date = typeof req.body?.date === 'string' ? req.body.date : '';
+    if (!visitId || !DATE_ONLY_RE.test(date)) {
+      res.status(400).json({ status: 'invalid', message: 'visit_id and date (YYYY-MM-DD) are required.' });
+      return;
+    }
+    const target = parseDateOnlyUtcNoon(date);
+    if (!target) {
+      res.status(400).json({ status: 'invalid', message: 'That is not a real date.' });
+      return;
+    }
+    if (target < todayUtcNoon()) {
+      res.status(400).json({ status: 'invalid', message: 'Pick a date in the future.' });
+      return;
+    }
+    if (target.getUTCDay() === 0) {
+      res.status(400).json({ status: 'invalid', message: "We don't clean on Sundays — pick another day." });
+      return;
+    }
+    if (!isInSeason(target)) {
+      res.status(422).json({
+        status: 'out_of_season',
+        message: 'Our cleaning season runs May 1 to October 31. Please pick a date in that window.',
+      });
+      return;
+    }
+    try {
+      const db = getDb();
+      const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
+      if (!v) {
+        res.status(404).json({ status: 'not_found' });
+        return;
+      }
+      if (v.customerId !== customerId) {
+        res.status(422).json({ status: 'not_yours', message: 'visit does not belong to the signed-in customer' });
+        return;
+      }
+      if (v.status !== 'scheduled' && v.status !== 'heading_there') {
+        res.status(409).json({ status: 'not_reschedulable', message: `This clean is ${v.status}.` });
+        return;
+      }
+      await db.update(visit).set({ scheduledFor: target }).where(eq(visit.id, visitId));
+      res.status(200).json({ status: 'ok', scheduled_for: date });
+    } catch (err) {
+      console.error('[me:reschedule] failed', err);
+      res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+    }
     return;
   }
 
