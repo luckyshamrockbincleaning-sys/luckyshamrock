@@ -55,7 +55,16 @@ describe('POST /api/book — happy path', () => {
     expect(subs[0]!.binCount).toBe(2);
 
     const visits = await db.select().from(visit).where(eq(visit.customerId, c!.id));
-    expect(visits).toHaveLength(12);
+    // NOT 12. Visit generation is capped to the May 1 - Oct 31 season, so a
+    // monthly plan yields only the cleans that actually fit before the season
+    // closes. Next season is generated when it opens.
+    expect(visits.length).toBeGreaterThan(0);
+    expect(visits.length).toBeLessThanOrEqual(12);
+    for (const v of visits) {
+      const m = v.scheduledFor.getUTCMonth() + 1;
+      expect(m).toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
     // Recurring visits derive bin_count from the subscription, so the per-visit
     // column stays null (single source of truth per visit type).
     expect(visits.every((v) => v.binCount === null)).toBe(true);

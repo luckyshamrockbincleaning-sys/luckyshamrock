@@ -118,19 +118,24 @@ describe('GET /api/me', () => {
       binCount: 2,
       startedOn: new Date('2026-06-01'),
     });
+    // In-season dates only. A quarterly plan cannot fit its 4-visit target
+    // inside a May-Oct season, and the top-up must NOT invent winter dates to
+    // reach it — that is the whole point of the seasonal cap.
     await db.insert(visit).values([
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-06-05') },
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-09-03') },
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-12-03') },
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2027-03-04') },
+      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-08-20') },
+      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-10-08') },
     ]);
     const res = mockResWithHeaders();
     await handler(await reqWithSession(customerId), res);
     expect(res.statusCode).toBe(200);
     expect(res.body.subscription.cadence).toBe('quarterly');
     expect(res.body.subscription.bin_count).toBe(2);
-    // 4 quarterly visits = target met, no top-up.
-    expect(res.body.upcoming_visits).toHaveLength(4);
+    expect(res.body.upcoming_visits).toHaveLength(2);
+    for (const v of res.body.upcoming_visits) {
+      const m = new Date(v.scheduled_for).getUTCMonth() + 1;
+      expect(m).toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
   });
 
   it('tops up the schedule when fewer than the target future visits exist', async () => {
@@ -144,21 +149,26 @@ describe('GET /api/me', () => {
       binCount: 1,
       startedOn: new Date('2026-06-01'),
     });
-    // Only 2 future visits; quarterly target is 4 → expect top-up to 4.
+    // One future visit early in the season. Quarterly target is 4, so the
+    // top-up wants 3 more at 13-week spacing — but only those landing inside
+    // the current season may be created. From 2026-05-07 that is 2026-08-06;
+    // the next would be November, which must be refused.
     await db.insert(visit).values([
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-06-05') },
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-09-03') },
+      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-05-07') },
     ]);
     const res = mockResWithHeaders();
     await handler(await reqWithSession(customerId), res);
     expect(res.statusCode).toBe(200);
-    expect(res.body.upcoming_visits).toHaveLength(4);
-    // The two NEW visits should each be 91 days (13 weeks) after the prior one,
-    // anchored to the latest pre-existing visit (2026-09-03).
-    const dates = res.body.upcoming_visits.map((v: any) => new Date(v.scheduled_for).getTime());
-    const dayMs = 1000 * 60 * 60 * 24;
-    expect((dates[2] - dates[1]) / dayMs).toBe(91);
-    expect((dates[3] - dates[2]) / dayMs).toBe(91);
+
+    const all = await db.select().from(visit).where(eq(visit.customerId, customerId));
+    // The top-up DID run (a visit was added) but stopped at the season edge.
+    expect(all.length).toBeGreaterThan(1);
+    for (const v of all) {
+      const m = v.scheduledFor.getUTCMonth() + 1;
+      expect(m, `topped up an out-of-season visit on ${v.scheduledFor.toISOString().slice(0, 10)}`)
+        .toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
   });
 
   it('does NOT top up for cancelled subscriptions', async () => {
@@ -307,5 +317,38 @@ describe('GET /api/me — past cleans', () => {
     const res = mockResWithHeaders();
     await handler(await reqWithSession(id), res);
     expect(res.body.past_visits).toEqual([]);
+  });
+});
+
+describe('GET /api/me — seasonal top-up', () => {
+  it('does not regenerate winter visits for a monthly subscriber', async () => {
+    const db = getDb();
+    const id = await makeCustomer();
+    const subId = crypto.randomUUID();
+    await db.insert(subscription).values({
+      id: subId, customerId: id, cadence: 'monthly', binCount: 1,
+      startedOn: new Date('2026-08-07T12:00:00Z'), status: 'active',
+    });
+    // Three in-season cleans, exactly the state Aaron/Kalie were left in.
+    for (const iso of ['2026-08-21', '2026-09-18', '2026-10-16']) {
+      await db.insert(visit).values({
+        id: crypto.randomUUID(), customerId: id, subscriptionId: subId,
+        scheduledFor: new Date(`${iso}T12:00:00Z`), status: 'scheduled',
+      });
+    }
+
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+    expect(res.statusCode).toBe(200);
+
+    // The top-up wants 12 future visits and sees only 3. It must NOT make up
+    // the difference by scheduling cleans through an Alberta winter.
+    const all = await db.select().from(visit).where(eq(visit.customerId, id));
+    for (const v of all) {
+      const m = v.scheduledFor.getUTCMonth() + 1;
+      expect(m, `regenerated an out-of-season visit on ${v.scheduledFor.toISOString().slice(0, 10)}`)
+        .toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
   });
 });

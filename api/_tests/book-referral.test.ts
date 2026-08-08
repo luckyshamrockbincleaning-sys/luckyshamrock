@@ -131,7 +131,7 @@ describe('booking with a referral code', () => {
     const res = mockRes();
     // Same email re-books (existing-customer path) quoting their own code.
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-12-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
               name: 'Richelle Regehr', email: 'self@example.com', referral_code: referrer.code } } as any, res);
 
     const [c] = await getDb().select().from(customer).where(eq(customer.id, referrer.id));
@@ -148,7 +148,7 @@ describe('a returning customer can still be referred', () => {
     // subscription blocks them from booking again.
     const first = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-11-04',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-09-03',
               name: 'Returning Pat', email: 'returning@example.com' } } as any, first);
     expect(first.statusCode).toBe(200);
     const [before] = await getDb().select().from(customer).where(eq(customer.email, 'returning@example.com'));
@@ -157,7 +157,7 @@ describe('a returning customer can still be referred', () => {
     // They come back for another clean, this time quoting a neighbour's code.
     const second = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-12-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
               name: 'Returning Pat', email: 'returning@example.com', referral_code: referrer.code } } as any, second);
     expect(second.statusCode).toBe(200);
 
@@ -176,11 +176,31 @@ describe('a returning customer can still be referred', () => {
 
     const second = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-12-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
               email: 'twice@example.com', referral_code: refB.code } } as any, second);
 
     const [c] = await getDb().select().from(customer).where(eq(customer.email, 'twice@example.com'));
     expect(c!.referredBy).toBe(refA.id);                 // first referrer keeps it
     expect(c!.creditCents).toBe(REFERRAL_REWARD_CENTS);  // $5, not $10
+  });
+});
+
+describe('seasonal limits on generated visits', () => {
+  it('never schedules a monthly plan outside the May-Oct season', async () => {
+    const res = mockRes();
+    await handler({ method: 'POST', headers: {}, query: {},
+      body: { ...validBooking, email: 'season-monthly@example.com', plan: 'monthly' } } as any, res);
+    expect(res.statusCode).toBe(200);
+
+    const [c] = await getDb().select().from(customer).where(eq(customer.email, 'season-monthly@example.com'));
+    const { visit } = await import('../../db/schema.js');
+    const vs = await getDb().select().from(visit).where(eq(visit.customerId, c!.id));
+    expect(vs.length).toBeGreaterThan(0);
+    for (const v of vs) {
+      const m = v.scheduledFor.getUTCMonth() + 1;
+      expect(m, `visit on ${v.scheduledFor.toISOString().slice(0, 10)} is out of season`)
+        .toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
   });
 });

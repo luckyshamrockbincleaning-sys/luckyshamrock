@@ -23,6 +23,7 @@ import {
 import { isStripeConfigured } from '../lib/stripe.js';
 import { formatFriendlyDate } from '../lib/dates.js';
 import { effectiveStartDate } from '../lib/launch.js';
+import { isInSeason, seasonEnd } from '../lib/season.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -257,6 +258,33 @@ export default async function handler(
               cadence,
               count: RECURRING_COUNT[cadence],
             });
+    }
+
+    // Bin cleaning is a pressure-washing business in Alberta — it cannot run
+    // through winter. Keep only THIS season's dates: filtering by month alone
+    // would also let next year's May and June through, and a customer booking
+    // in August must not see dates ten months out when their winter view will
+    // say "paused until May". Next season is generated when it opens.
+    // A plan bought in September legitimately yields only a clean or two.
+    const seasonCutoff = seasonEnd(startDate);
+    visitDates = visitDates.filter((d) => {
+      // Nothing may ever fall outside May 1 - Oct 31.
+      if (!isInSeason(d)) return false;
+      // Beyond that, the current-season cap applies only to the ROLLING
+      // cadences (monthly/bimonthly/quarterly), which we auto-fill to a target
+      // count — those must not run ahead into a season we haven't opened.
+      // A one-off is a date the customer deliberately chose, and the Three
+      // Wash Season is an annual product whose three washes legitimately span
+      // into next year. Capping either would silently drop what was bought.
+      if (cadence === null || cadence === 'seasonal') return true;
+      return d <= seasonCutoff;
+    });
+    if (visitDates.length === 0) {
+      res.status(422).json({
+        status: 'out_of_season',
+        message: "Our cleaning season runs May 1 to October 31. Join the waitlist and we'll let you know when we're back.",
+      });
+      return;
     }
 
     const visitRows = visitDates.map((scheduledFor) => ({

@@ -306,6 +306,13 @@ describe('POST /api/book payment setup', () => {
     expect(subs[0]!).toMatchObject({ cadence: 'monthly', binCount: 2, status: 'active' });
 
     const visits = await db.select().from(visit).where(eq(visit.customerId, existingCustomerId));
-    expect(visits).toHaveLength(12);
+    // Not 12 — visit generation is capped to the May 1 - Oct 31 season, so a
+    // monthly plan yields only the cleans that fit before the season closes.
+    expect(visits.length).toBeGreaterThan(0);
+    for (const v of visits) {
+      const m = v.scheduledFor.getUTCMonth() + 1;
+      expect(m).toBeGreaterThanOrEqual(5);
+      expect(m).toBeLessThanOrEqual(10);
+    }
   });
 });

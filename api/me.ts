@@ -7,6 +7,7 @@ import { getSessionCustomerId } from '../lib/session.js';
 import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { effectiveStartDate } from '../lib/launch.js';
+import { isInSeason, seasonEnd } from '../lib/season.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 
@@ -137,13 +138,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           const stepWeeks = CADENCE_WEEKS[sub.cadence];
           newDates = Array.from({ length: deficit }, (_, i) => addWeeks(anchorDate, (i + 1) * stepWeeks));
         }
-        const newRows = newDates.map((scheduledFor) => ({
-          id: crypto.randomUUID(),
-          customerId,
-          subscriptionId: sub.id,
-          scheduledFor,
-        }));
-        await db.insert(visit).values(newRows);
+        // Two limits, both load-bearing.
+        //
+        // 1. In-season only: without this the top-up cheerfully books cleans
+        //    through an Alberta winter, and it would silently UNDO any manual
+        //    cleanup the next time the customer opened this page.
+        // 2. Current season only: a customer mid-season must not see next
+        //    year's dates appear months early. Their winter view says "paused
+        //    until May"; next season is generated when it opens.
+        const cutoff = seasonEnd(today);
+        newDates = newDates.filter((d) => {
+          if (!isInSeason(d)) return false;
+          // The Three Wash Season is an annual product (May/Jul/Sep); its
+          // washes legitimately cross into next year. Only the rolling
+          // cadences are held to the current season.
+          if (sub.cadence === 'seasonal') return true;
+          return d <= cutoff;
+        });
+
+        if (newDates.length > 0) {
+          const newRows = newDates.map((scheduledFor) => ({
+            id: crypto.randomUUID(),
+            customerId,
+            subscriptionId: sub.id,
+            scheduledFor,
+          }));
+          await db.insert(visit).values(newRows);
+        }
       }
     }
 
