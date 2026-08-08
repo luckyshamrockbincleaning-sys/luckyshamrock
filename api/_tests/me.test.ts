@@ -442,3 +442,18 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe('GET /api/me — season state', () => {
+  it('reports the season window so /manage can explain the winter pause', async () => {
+    const id = await makeCustomer();
+    const res = mockResWithHeaders();
+    await handler(await reqWithSession(id), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.season).toBeDefined();
+    expect(typeof res.body.season.in_season).toBe('boolean');
+    // Always present, so the UI can say "back in May" without doing date maths.
+    expect(res.body.season.next_start).toMatch(/^\d{4}-05-01$/);
+    expect(res.body.season.label).toBe('May 1 – October 31');
+  });
+});

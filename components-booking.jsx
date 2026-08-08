@@ -391,6 +391,7 @@ const Booking = ({ tweaks }) => {
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Eco-safe, kid-safe, pet-safe formula</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Pause or cancel anytime in your account</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Service area: all of {tweaks.city}</li>
+              <li><span className="perk-icon"><Icon.Check size={14}/></span>Cleaning season runs May 1 – October 31 — we pause over winter and you're not charged</li>
             </ul>
           </div>
 
@@ -464,6 +465,13 @@ const Booking = ({ tweaks }) => {
                   {bins > 1 && (
                     <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
                       <span>Extra bins are $12 each per clean.</span>
+                    </div>
+                  )}
+                  {/* Recurring plans pause over winter. Said here, at the moment
+                      of commitment, so nobody discovers it in November. */}
+                  {!isOneoff && (
+                    <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
+                      <span>Season runs May 1 – Oct 31. We pause for winter — no cleans, no charges — and email you before we're back.</span>
                     </div>
                   )}
                 </div>

@@ -7,7 +7,7 @@ import { getSessionCustomerId } from '../lib/session.js';
 import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { effectiveStartDate } from '../lib/launch.js';
-import { isInSeason, seasonEnd } from '../lib/season.js';
+import { isInSeason, seasonEnd, nextSeasonStart, SEASON_LABEL } from '../lib/season.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 
@@ -342,6 +342,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         subscription_id: v.subscriptionId,
         notes: v.notes,
       })),
+      // Season state, so /manage can explain a winter with no visits rather
+      // than showing a bare "Nothing scheduled." to an active subscriber.
+      season: {
+        in_season: isInSeason(new Date()),
+        label: SEASON_LABEL,
+        next_start: nextSeasonStart(new Date()).toISOString().slice(0, 10),
+      },
       past_visits: pastVisits.map((v) => ({
         id: v.id,
         scheduled_for: v.scheduledFor.toISOString().slice(0, 10),

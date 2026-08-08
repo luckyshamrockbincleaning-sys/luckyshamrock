@@ -298,6 +298,30 @@ function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
   );
 }
 
+// An active subscriber in November has no upcoming visits — not because
+// anything went wrong, but because we can't pressure-wash through an Alberta
+// winter. Without this they'd see a bare "Nothing scheduled." and reasonably
+// assume their subscription had lapsed.
+function OffSeasonCard({ season, hasSubscription }) {
+  if (!season || season.in_season) return null;
+  const backIn = new Date(`${season.next_start}T12:00:00`).toLocaleDateString('en-CA', { month: 'long', year: 'numeric' });
+  return (
+    <div className="manage-card" style={{ borderLeft: '4px solid #1d7a3d' }}>
+      <h2>Paused for winter ❄️</h2>
+      <p style={{ marginBottom: 8 }}>
+        Our cleaning season runs <strong>{season.label}</strong> — we can't pressure-wash
+        a bin once it's freezing.
+      </p>
+      <p style={{ marginBottom: 0 }}>
+        {hasSubscription
+          ? <>Your plan is still active and <strong>you won't be charged over the winter</strong> — we only
+             bill once a bin is actually cleaned. We'll email you before we start up again in {backIn}.</>
+          : <>We'll be back in {backIn}. Book any time and we'll schedule your first clean for the new season.</>}
+      </p>
+    </div>
+  );
+}
+
 function VisitsCard({ visits, onSkip, onReschedule, busyVisitId }) {
   // Which visit currently has its date picker open, and what's typed in it.
   const [editing, setEditing] = useState(null);
@@ -653,6 +677,10 @@ function ManageApp() {
               busy={busy}
             />
           )}
+          <OffSeasonCard
+            season={state.me.season}
+            hasSubscription={!!state.me.subscription && state.me.subscription.status === 'active'}
+          />
           <VisitsCard
             visits={state.me.upcoming_visits}
             onSkip={onSkip}

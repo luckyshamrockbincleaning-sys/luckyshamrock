@@ -17,6 +17,9 @@
  * keeps the calendar day stable either side of a Mountain-Time offset.
  */
 
+/** Human-readable season, for customer-facing copy. Keep in sync with the months below. */
+export const SEASON_LABEL = 'May 1 – October 31';
+
 /** May. Season opens on the 1st. */
 export const SEASON_START_MONTH = 5;
 /** October. Season closes on the 31st, inclusive. */
