@@ -1009,7 +1009,7 @@ function OpsApp() {
           href="/ops/help.html"
           style={{ fontSize: 13, color: 'var(--green, #1d7a3d)', fontWeight: 600, textDecoration: 'none' }}
         >
-          How to take payment →
+          Operator field card →
         </a>
       </div>
 
