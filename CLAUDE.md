@@ -277,6 +277,31 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   `void promise` send once before (see the 2026-06-10 magic-link P0). The response
   returns `confirmation_sent` (true only on a genuine fresh send: `ok && !skipped`)
   so /ops can warn the operator to say the date out loud when no email went out.
+- **On-the-spot surcharge needs a reason, always.** `POST /api/operator/act
+  {op:'done'}` takes `surcharge_cents` (0–50000) plus `surcharge_reason`, and
+  **rejects an amount with no reason** — the reason prints on the customer's
+  receipt and in the done email, because an unexplained extra on a card
+  statement is how you earn a chargeback. Stored on the `payment` row
+  (`surcharge_cents`/`surcharge_reason`, migration 0013) so it is auditable.
+- **Order of money operations at Done is deliberate:** base (or the operator's
+  amount override) **+ surcharge**, then **− discount**, then **− referral
+  credit**. The surcharge is part of what is owed before anything comes off it,
+  so "$15 extra, but here's $10 off" behaves the way the customer just heard it.
+- **`customer.postal_code` is NULLABLE.** Self-serve bookings always supply one
+  (it gates the service area), but a **walk-up collects a phone number instead**
+  — the operator is standing at the address. **Every address string must
+  tolerate a missing postal code**; `/ops` funnels them all through `addressOf()`
+  and the server through `[street, [city, postal].filter(Boolean).join(' ')]`.
+  Interpolating it directly renders "Fort Saskatchewan null" into Maps links and
+  receipts.
+- **Walk-up field order is name → street → phone → bins → email**, matching how
+  the conversation actually goes at a gate. Only `street` is required.
+- **`POST /api/operator/customer` patches a customer's details** (name, street,
+  city, phone, email) — only the fields supplied. Details typed one-handed at a
+  gate get typos, and customers often give an email only after the job is done.
+  A duplicate email returns **409 `email_taken`** rather than letting the UNIQUE
+  constraint surface as a 500.
+
 - **Charge on Done is crash-safe + race-safe.** `handleDone` atomically CLAIMS
   the visit (`UPDATE ... WHERE id=? AND status IN (actionable) RETURNING`) so two
   concurrent Done taps can't both charge — the loser gets 409, not a duplicate
