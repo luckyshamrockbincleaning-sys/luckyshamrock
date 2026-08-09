@@ -120,13 +120,12 @@ const Pricing = ({ tweaks, onBookClick }) => {
         <p style={{marginTop: 40, color: 'var(--ink-3)', fontSize: 14}}>
           {`Extra bins are $${P.extraBinPerClean} each per clean.`} Service area: {tweaks.city}. Prices include tax.
         </p>
-        {/* Said here rather than discovered on a card statement. Deliberately
-            promises we ask first — the operator's extra charge always carries a
-            written reason onto the receipt. */}
+        {/* Disclosed before they buy rather than discovered on a card statement.
+            Kept to the bare fact on purpose — the receipt and the done email
+            already carry the operator's written reason for any extra. */}
         <p style={{marginTop: 8, color: 'var(--ink-3)', fontSize: 13}}>
           * Bins in an unusually bad state (heavy build-up, maggots, spills that need
-          a second pass) may cost a little extra. We'll show you the reason on your
-          receipt, and it's always the same crew doing the work — never a surprise fee.
+          a second pass) may cost a little extra.
         </p>
       </div>
     </section>
