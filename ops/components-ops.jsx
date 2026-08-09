@@ -27,6 +27,15 @@ function isoPlusDays(iso, days) {
   return toISODate(new Date(y, m - 1, d + days));
 }
 
+// Walk-ups have no postal code (the operator was standing at the address), so
+// every address string has to tolerate it being absent — otherwise the Maps
+// link and the QR receipt read "... Fort Saskatchewan null".
+function addressOf(x) {
+  if (!x) return '';
+  const cityLine = [x.city, x.postal_code].filter(Boolean).join(' ');
+  return [x.street, cityLine].filter(Boolean).join(', ');
+}
+
 function Flash({ kind, text, onDismiss }) {
   if (!text) return null;
   return (
@@ -42,6 +51,7 @@ function Flash({ kind, text, onDismiss }) {
 function PasswordGate({ onAuthed }) {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [err, setErr] = useState('');
 
   async function submit(e) {
@@ -247,7 +257,10 @@ function PhotoStep({ n, title, hint, state, onChange, busy }) {
 // Walk-up job: someone flags the truck down. Deliberately minimal — street,
 // bins, and an optional email are all that's needed to start cleaning.
 function NewJobCard({ onCreated }) {
-  const emptyForm = { street: '', postal_code: '', bin_count: 1, email: '', name: '', scheduled_for: '' };
+  // Field order matches how the conversation actually goes at a gate: who are
+  // you, where, how do I reach you, how many bins, and an email if you'll give
+  // one. No postal code — the operator is standing at the address.
+  const emptyForm = { name: '', street: '', phone: '', bin_count: 1, email: '', scheduled_for: '' };
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
@@ -259,17 +272,17 @@ function NewJobCard({ onCreated }) {
   async function submit() {
     if (busy) return;
     setErr('');
-    if (!form.street.trim() || !form.postal_code.trim()) {
-      setErr('Street and postal code are required.');
+    if (!form.street.trim()) {
+      setErr('Street address is required.');
       return;
     }
     setBusy(true);
     try {
       const body = {
         street: form.street.trim(),
-        postal_code: form.postal_code.trim(),
         bin_count: Number(form.bin_count) || 1,
       };
+      if (form.phone.trim()) body.phone = form.phone.trim();
       if (form.email.trim()) body.email = form.email.trim();
       if (form.name.trim()) body.name = form.name.trim();
       if (form.scheduled_for) body.scheduled_for = form.scheduled_for;
@@ -318,15 +331,15 @@ function NewJobCard({ onCreated }) {
     <div className="ops-card" style={{ marginBottom: 12 }}>
       <h2 style={{ marginTop: 0, fontSize: 17 }}>New job at this address</h2>
       <Flash kind="err" text={err} />
+      <input style={field} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
-      <input style={field} placeholder="Postal code *" value={form.postal_code} onChange={(e) => setForm({ ...form, postal_code: e.target.value })} />
+      <input style={field} type="tel" inputMode="tel" placeholder="Phone number" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
       <select style={field} value={form.bin_count} onChange={(e) => setForm({ ...form, bin_count: e.target.value })}>
         <option value={1}>1 bin</option>
         <option value={2}>2 bins</option>
         <option value={3}>3 bins</option>
       </select>
-      <input style={field} placeholder="Email (optional — for receipt)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-      <input style={field} placeholder="Name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      <input style={field} type="email" inputMode="email" placeholder="Email (optional — for receipt &amp; photos)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
 
       <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
         When?
@@ -369,7 +382,60 @@ function NewJobCard({ onCreated }) {
   );
 }
 
-function StopCard({ stop, onAction, busy, showDate }) {
+// Details typed one-handed at a gate get typos, and customers often decide to
+// give an email only after the job is done. Read-only until opened.
+function EditCustomerCard({ stop, onSaved, onClose }) {
+  const [form, setForm] = useState({
+    name: stop.customer_name || '', street: stop.street || '',
+    phone: stop.phone || '', email: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function save() {
+    if (busy) return;
+    setErr('');
+    if (!form.street.trim()) { setErr('Street address is required.'); return; }
+    setBusy(true);
+    try {
+      const body = { customer_id: stop.customer_id };
+      if (form.name.trim()) body.name = form.name.trim();
+      if (form.street.trim()) body.street = form.street.trim();
+      body.phone = form.phone.trim();
+      if (form.email.trim()) body.email = form.email.trim();
+      const r = await fetch('/api/operator/customer', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || j.status || `${r.status}`);
+      onSaved();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const f = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed rgba(0,0,0,0.12)' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Fix these details</div>
+      <Flash kind="err" text={err} />
+      <input style={f} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      <input style={f} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
+      <input style={f} type="tel" inputMode="tel" placeholder="Phone number" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+      <input style={f} type="email" inputMode="email" placeholder="Add an email (for receipt &amp; photos)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-go ops-btn" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save details'}</button>
+        <button className="btn btn-ghost ops-btn" disabled={busy} onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
   const isDone = stop.status === 'done';
   const isCancelled = stop.status === 'cancelled';
   const isSkipped = stop.status === 'skipped';
@@ -379,12 +445,17 @@ function StopCard({ stop, onAction, busy, showDate }) {
   const [discount, setDiscount] = useState('');
   const [payMethod, setPayMethod] = useState('card_on_file');
   const [amountOverride, setAmountOverride] = useState('');
+  // On-the-spot extra for a bin in a genuinely bad state. The reason is
+  // mandatory because it prints on the customer's receipt.
+  const [surcharge, setSurcharge] = useState('');
+  const [surchargeReason, setSurchargeReason] = useState('');
   // A Done with photos genuinely takes 5-10s: ~1MB of images upload over mobile
   // data, then the server builds the wash animation (7-13s on real photos). It
   // can't move to the background — Vercel freezes the function once it responds.
   // So the button has to SAY it's working, or the operator assumes he missed it
   // and taps again.
   const [submitting, setSubmitting] = useState(false);
+  const [editing, setEditing] = useState(false);
   // One before/after pair per bin. bin 0 is the "hero" pair — it's the one
   // the server turns into the wash-GIF animation; bins 1+ always ride along
   // as plain before/after photos (see lib/operator-handlers.ts).
@@ -442,6 +513,15 @@ function StopCard({ stop, onAction, busy, showDate }) {
     };
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
+    const sur = parseFloat(surcharge);
+    if (Number.isFinite(sur) && sur > 0) {
+      if (!surchargeReason.trim()) {
+        window.alert('Add a short reason for the extra charge — the customer sees it on their receipt.');
+        return;
+      }
+      payload.surcharge_cents = Math.round(sur * 100);
+      payload.surcharge_reason = surchargeReason.trim();
+    }
     setSubmitting(true);
     let result;
     try {
@@ -484,7 +564,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
         <div>
           {showDate && <div className="ops-date">{formatDate(stop.scheduled_for)}</div>}
           <div className="ops-name">{stop.customer_name}</div>
-          <div className="ops-addr">{stop.street}, {stop.city} {stop.postal_code}</div>
+          <div className="ops-addr">{addressOf(stop)}</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
           <span className={`visit-status ${stop.status}`}>{stop.status.replace('_', ' ')}</span>
@@ -569,6 +649,31 @@ function StopCard({ stop, onAction, busy, showDate }) {
             />
             <span style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>blank = standard price</span>
           </div>
+
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed rgba(0,0,0,0.12)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Extra&nbsp;$</label>
+              <input
+                type="number" min="0" max="500" step="1" inputMode="decimal" placeholder="0"
+                value={surcharge} onChange={(e) => setSurcharge(e.target.value)}
+                style={{ width: 90, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>for a really bad bin</span>
+            </div>
+            {parseFloat(surcharge) > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <input
+                  type="text" maxLength={200}
+                  placeholder="Why? e.g. maggots, caked-on food — needed a second pass"
+                  value={surchargeReason} onChange={(e) => setSurchargeReason(e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 14 }}
+                />
+                <div style={{ fontSize: 12, color: 'var(--ink-3, #6b6b6b)', marginTop: 4 }}>
+                  Required — this prints on their receipt so the extra isn't a surprise.
+                </div>
+              </div>
+            )}
+          </div>
           {payMethod === 'terminal' && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>
               <a
@@ -603,7 +708,7 @@ function StopCard({ stop, onAction, busy, showDate }) {
             onClick={() => {
               // Open directions synchronously in the tap handler (popup
               // blockers kill window.open from async callbacks), then notify.
-              const dest = encodeURIComponent(`${stop.street}, ${stop.city} ${stop.postal_code}`);
+              const dest = encodeURIComponent(addressOf(stop));
               window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}`, '_blank', 'noopener');
               onAction('notify', stop);
             }}
@@ -630,7 +735,20 @@ function StopCard({ stop, onAction, busy, showDate }) {
           <button className="btn btn-skip ops-btn" disabled={busy || submitting} onClick={() => onAction('skip', stop)}>Skip</button>
         )}
         <button className="btn btn-ghost ops-btn" disabled={busy || submitting} onClick={() => onAction('note', stop)}>Note</button>
+        {!isDone && !isCancelled && (
+          <button className="btn btn-ghost ops-btn" disabled={busy || submitting} onClick={() => setEditing(!editing)}>
+            {editing ? 'Close' : 'Edit details'}
+          </button>
+        )}
       </div>
+
+      {editing && (
+        <EditCustomerCard
+          stop={stop}
+          onClose={() => setEditing(false)}
+          onSaved={() => { setEditing(false); onRefresh(); }}
+        />
+      )}
 
       {submitting && (
         <div style={{ marginTop: 10, fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
@@ -689,7 +807,7 @@ function HistoryCard({ item }) {
         <div>
           <div className="ops-date">{formatDate(item.scheduled_for)}</div>
           <div className="ops-name">{item.customer_name}</div>
-          <div className="ops-addr">{item.street}, {item.city} {item.postal_code}</div>
+          <div className="ops-addr">{addressOf(item)}</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
           <span className="visit-status" style={{ background: st.bg, color: st.color }}>{st.label}</span>
@@ -730,7 +848,7 @@ function AttentionCard({ item, onAction, busy }) {
         <div>
           <div className="ops-date">{formatDate(item.scheduled_for)}</div>
           <div className="ops-name">{item.customer.name}</div>
-          <div className="ops-addr">{item.customer.street}, {item.customer.city} {item.customer.postal_code}</div>
+          <div className="ops-addr">{addressOf(item.customer)}</div>
         </div>
         <span className="visit-status" style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
@@ -927,7 +1045,7 @@ function OpsApp() {
             url: j.payment_url,
             svg: j.payment_qr_svg || '',
             customerName: stop.customer_name,
-            address: `${stop.street}, ${stop.city} ${stop.postal_code}`,
+            address: addressOf(stop),
           });
         } else {
           // No code on this Done — clear any stale panel from a PREVIOUS
@@ -1070,7 +1188,7 @@ function OpsApp() {
         </>
       ) : (
         data.stops.map((s) => (
-          <StopCard key={s.id} stop={s} onAction={onAction} busy={busy} showDate={view === 'upcoming'} />
+          <StopCard key={s.id} stop={s} onAction={onAction} onRefresh={() => load(view)} busy={busy} showDate={view === 'upcoming'} />
         ))
       )}
     </div>

@@ -114,6 +114,7 @@ export function operatorTodayISO(): string {
  */
 export interface OperatorVisitRow {
   id: string;
+  customerId: string;
   scheduledFor: Date;
   status: string;
   paymentStatus: string;
@@ -124,7 +125,7 @@ export interface OperatorVisitRow {
   phone: string | null;
   street: string;
   city: string;
-  postalCode: string;
+  postalCode: string | null;
   binLocation: string | null;
   binCount: number | null;
   creditCents?: number | null;
@@ -134,6 +135,8 @@ export interface OperatorVisitRow {
 export function toOperatorVisit(r: OperatorVisitRow) {
   return {
     id: r.id,
+    // Needed so /ops can correct a walk-up's details after the fact.
+    customer_id: r.customerId,
     scheduled_for: r.scheduledFor.toISOString().slice(0, 10),
     customer_name: r.name,
     phone: r.phone,

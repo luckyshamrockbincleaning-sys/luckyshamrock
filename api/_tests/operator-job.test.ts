@@ -353,3 +353,84 @@ describe('walk-up customers can refer too', () => {
     expect(c!.referralCode).not.toMatch(/[01OIL]/);
   });
 });
+
+describe('walk-up form: phone instead of postal code, and editing', () => {
+  it('creates a job with a phone and no postal code', async () => {
+    const res = mockRes();
+    await handler(await req(true, {
+      name: 'Doorstep Dan', street: '9 Curb Lane', phone: '780-555-0142',
+      bin_count: 2, email: 'dan@example.com',
+    }), res);
+
+    expect(res.statusCode).toBe(201);
+    const [c] = await getDb().select().from(customer).where(eq(customer.email, 'dan@example.com'));
+    expect(c!.phone).toBe('780-555-0142');
+    expect(c!.postalCode).toBeNull();
+    expect(c!.street).toBe('9 Curb Lane');
+  });
+
+  it('still works with no phone at all', async () => {
+    const res = mockRes();
+    await handler(await req(true, { street: '11 Curb Lane', bin_count: 1 }), res);
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('still requires a street', async () => {
+    const res = mockRes();
+    await handler(await req(true, { phone: '780-555-0142', bin_count: 1 }), res);
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/operator/customer — fix a walk-up\'s details', () => {
+  async function editReq(authed: boolean, body: Record<string, unknown>) {
+    const headers: Record<string, string> = {};
+    if (authed) headers.cookie = `${OPERATOR_COOKIE_NAME}=${await signOperatorCookie()}`;
+    return { method: 'POST', headers, query: {}, body } as any;
+  }
+
+  it('returns 401 without an operator cookie', async () => {
+    const { handleEditCustomer } = await import('../../lib/operator-handlers.js');
+    const res = mockRes();
+    await handleEditCustomer(await editReq(false, {}), res);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('corrects a typo in the address and adds an email afterwards', async () => {
+    const { handleEditCustomer } = await import('../../lib/operator-handlers.js');
+    const created = mockRes();
+    await handler(await req(true, { name: 'Typo Tim', street: '9 Crub Lane', phone: '780-555-0100', bin_count: 1 }), created);
+    const cid = created.body.customer_id;
+
+    const res = mockRes();
+    await handleEditCustomer(await editReq(true, {
+      customer_id: cid, street: '9 Curb Lane', email: 'tim@example.com', name: 'Tim Curb',
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    const [c] = await getDb().select().from(customer).where(eq(customer.id, cid));
+    expect(c!.street).toBe('9 Curb Lane');
+    expect(c!.email).toBe('tim@example.com');
+    expect(c!.name).toBe('Tim Curb');
+    expect(c!.phone).toBe('780-555-0100'); // untouched
+  });
+
+  it('rejects an email already used by someone else', async () => {
+    const { handleEditCustomer } = await import('../../lib/operator-handlers.js');
+    const a = mockRes();
+    await handler(await req(true, { street: '1 A St', email: 'taken@example.com', bin_count: 1 }), a);
+    const b = mockRes();
+    await handler(await req(true, { street: '2 B St', bin_count: 1 }), b);
+
+    const res = mockRes();
+    await handleEditCustomer(await editReq(true, { customer_id: b.body.customer_id, email: 'taken@example.com' }), res);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('404s for an unknown customer', async () => {
+    const { handleEditCustomer } = await import('../../lib/operator-handlers.js');
+    const res = mockRes();
+    await handleEditCustomer(await editReq(true, { customer_id: crypto.randomUUID(), street: 'X' }), res);
+    expect(res.statusCode).toBe(404);
+  });
+});

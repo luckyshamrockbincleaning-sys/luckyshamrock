@@ -667,3 +667,76 @@ describe('credit is never consumed without a payment record', () => {
     expect(after!.creditCents).toBe(0);
   });
 });
+
+describe('extra charge for a filthy bin', () => {
+  it('adds the surcharge to the amount and records the reason', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-20');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      payment_method: 'cash',
+      surcharge_cents: 1500,
+      surcharge_reason: 'Maggots and caked-on food, needed a second pass',
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    // One-off 1 bin = $45.00, plus a $15 surcharge = $60.00
+    expect(res.body.charge.amount_cents).toBe(6000);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.amountCents).toBe(6000);
+    expect(p!.surchargeCents).toBe(1500);
+    expect(p!.surchargeReason).toBe('Maggots and caked-on food, needed a second pass');
+  });
+
+  it('applies the discount and credit AFTER the surcharge', async () => {
+    const db = getDb();
+    const c = await seedCustomer();
+    await db.update(customer).set({ creditCents: 500 }).where(eq(customer.id, c));
+    const v1 = await addVisit(c, '2026-08-20');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', {
+      payment_method: 'cash', surcharge_cents: 2000, discount_cents: 1000,
+      surcharge_reason: 'Extremely dirty',
+    }), res);
+
+    // $45 base + $20 surcharge = $65, less $10 discount = $55, less $5 credit = $50
+    expect(res.body.charge.amount_cents).toBe(5000);
+  });
+
+  it('refuses a surcharge with no reason — the customer must be told why', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-20');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash', surcharge_cents: 1500 }), res);
+
+    expect(res.statusCode).toBe(400);
+    expect((res.body as any).message).toMatch(/reason/i);
+    const [v] = await getDb().select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('scheduled');
+  });
+
+  it('rejects a negative or absurd surcharge', async () => {
+    const c = await seedCustomer();
+    for (const cents of [-500, 500000]) {
+      const v = await addVisit(c, '2026-08-20');
+      const res = mockRes();
+      await handler(await req(true, v, 'POST', {
+        payment_method: 'cash', surcharge_cents: cents, surcharge_reason: 'x',
+      }), res);
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it('charges the normal price when no surcharge is given', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-08-20');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'cash' }), res);
+    expect(res.body.charge.amount_cents).toBe(4500);
+    const [p] = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(p!.surchargeCents).toBe(0);
+    expect(p!.surchargeReason).toBeNull();
+  });
+});

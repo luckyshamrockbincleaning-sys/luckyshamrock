@@ -165,6 +165,12 @@ export function doneTemplate(p: {
    *             a separate receipt email once the customer pays).
    */
   charge?: { kind: 'charged' | 'cash' | 'terminal' | 'comped' | 'failed' | 'none'; amountCents?: number };
+  /**
+   * An on-the-spot extra for a bin in an unusually bad state. Stated in the
+   * email body as well as the attached receipt — plenty of people never open
+   * the PDF, and a surprise on a card statement is worse than a sentence here.
+   */
+  surcharge?: { amountCents: number; reason: string } | null;
 }): RenderedEmail {
   const subject = `Your garbage bin is clean`;
   const nextLine = p.nextVisitDate ? `Next clean: ${p.nextVisitDate}.` : `That was your last scheduled clean.`;
@@ -235,6 +241,15 @@ export function doneTemplate(p: {
   }
   const chargeText = chargeLine ? `\n\n${chargeLine}` : '';
   const chargeHtml = chargeLine ? `<p>${escapeHtml(chargeLine)}</p>` : '';
+  const sur = p.surcharge && p.surcharge.amountCents > 0 ? p.surcharge : null;
+  const surchargeText = sur
+    ? `\n\nThis clean included an extra ${formatCad(sur.amountCents)}: ${sur.reason}`
+    : '';
+  const surchargeHtml = sur
+    ? `<p style="background:#FBF0D5;border-radius:8px;padding:10px 12px;margin:0 0 12px">` +
+      `<strong>Extra charge: ${formatCad(sur.amountCents)}</strong><br>` +
+      `<span style="font-size:14px">${escapeHtml(sur.reason)}</span></p>`
+    : '';
   // Star row beats the plain review link when a rating URL exists: one tap
   // records the rating in-place, and happy taps continue on to Google.
   const starsHtml = p.ratingBaseUrl
@@ -278,6 +293,7 @@ export function doneTemplate(p: {
   const text =
     `Hi ${p.name},\n\n` +
     `Garbage bin cleaned. ${nextLine}` +
+    surchargeText +
     chargeText +
     photoText +
     starsText +
@@ -288,6 +304,7 @@ export function doneTemplate(p: {
   const html = brandWrap(
     `<p>Hi ${escapeHtml(p.name)},</p>` +
     `<p>Garbage bin cleaned. ${escapeHtml(nextLine)}</p>` +
+    surchargeHtml +
     chargeHtml +
     photoHtml +
     extraBinsHtml +
@@ -410,7 +427,7 @@ export function operatorNewBookingTemplate(p: {
     ['Plan', p.plan],
     ['First clean', p.firstVisitDate],
     ['Bins', String(p.binCount)],
-    ['Address', `${p.street}, ${p.city} ${p.postalCode}`],
+    ['Address', [p.street, [p.city, p.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')],
     ['Email', p.email],
   ];
   if (p.phone) rows.push(['Phone', p.phone]);

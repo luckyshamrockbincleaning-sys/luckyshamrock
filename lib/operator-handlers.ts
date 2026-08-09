@@ -75,11 +75,24 @@ const donePaymentSchema = z.object({
   // Operator override for doorstep deals ("$40 cash"). Server still floors it
   // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
   amount_cents: z.number().int().min(0).max(100_000).optional(),
-});
+  // On-the-spot extra for a bin in an unusually bad state. The reason is
+  // REQUIRED whenever an amount is charged: it prints on the customer's
+  // receipt, and an unexplained extra charge is how you earn a chargeback.
+  surcharge_cents: z.number().int().min(0).max(50_000).optional(),
+  surcharge_reason: z.string().trim().min(1).max(200).optional(),
+})
+  .refine((d) => !d.surcharge_cents || d.surcharge_cents === 0 || !!d.surcharge_reason, {
+    message: 'A surcharge needs a reason — the customer sees it on their receipt.',
+    path: ['surcharge_reason'],
+  });
 const newJobSchema = z
   .object({
     street: z.string().trim().min(1).max(200),
-    postal_code: z.string().trim().min(1).max(10),
+    // No postal code. The operator is standing at the address, so it buys
+    // nothing — a phone number is what they actually need to reach someone
+    // about a locked gate or a bin that never came out.
+    phone: z.string().trim().min(1).max(40).optional(),
+    postal_code: z.string().trim().max(10).optional(),
     bin_count: z.number().int().min(1).max(3).default(1),
     email: z.string().trim().toLowerCase().email().optional(),
     name: z.string().trim().min(1).max(120).optional(),
@@ -127,6 +140,7 @@ const newJobSchema = z
 // Columns selected for the operator stop view (customer + subscription join).
 const stopColumns = {
   id: visit.id,
+  customerId: visit.customerId,
   scheduledFor: visit.scheduledFor,
   status: visit.status,
   paymentStatus: visit.paymentStatus,
@@ -403,7 +417,8 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
           name,
           street: data.street,
           city: data.city ?? 'Fort Saskatchewan',
-          postalCode: normalizePostalCode(data.postal_code),
+          phone: data.phone ?? null,
+          postalCode: data.postal_code ? normalizePostalCode(data.postal_code) : null,
           pickupDay: 'wednesday', // unused for one-offs; column is NOT NULL
           // Walk-ups get a referral code like anyone else. Without this they
           // are permanently unable to refer a neighbour — the backfill script
@@ -471,6 +486,81 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     });
   } catch (err) {
     console.error('[operator/job] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/customer  → fix a walk-up's details after the fact
+// ─────────────────────────────────────────────────────────────────────
+const editCustomerSchema = z.object({
+  customer_id: z.string().min(1),
+  name: z.string().trim().min(1).max(120).optional(),
+  street: z.string().trim().min(1).max(200).optional(),
+  city: z.string().trim().min(1).max(120).optional(),
+  phone: z.string().trim().max(40).optional(),
+  email: z.string().trim().toLowerCase().email().optional(),
+});
+
+/**
+ * Walk-up details get typed one-handed at a customer's gate, so they are going
+ * to be wrong sometimes — a mangled street, a phone number that was called out
+ * over a running truck, an email the customer decided to give only afterwards.
+ *
+ * Only the fields supplied are touched, so this can be used to add an email to
+ * an existing job without disturbing anything else.
+ */
+export async function handleEditCustomer(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = editCustomerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data = parsed.data;
+  try {
+    const db = getDb();
+    const [existing] = await db.select().from(customer).where(eq(customer.id, data.customer_id));
+    if (!existing) {
+      res.status(404).json({ status: 'not_found' });
+      return;
+    }
+
+    // customer.email is UNIQUE. Catching the clash here gives the operator a
+    // sentence they can act on instead of a generic 500 from the constraint.
+    if (data.email && data.email !== existing.email) {
+      const [clash] = await db.select({ id: customer.id }).from(customer).where(eq(customer.email, data.email));
+      if (clash && clash.id !== existing.id) {
+        res.status(409).json({
+          status: 'email_taken',
+          message: 'Another customer already uses that email.',
+        });
+        return;
+      }
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (data.name !== undefined) patch.name = data.name;
+    if (data.street !== undefined) patch.street = data.street;
+    if (data.city !== undefined) patch.city = data.city;
+    if (data.phone !== undefined) patch.phone = data.phone || null;
+    if (data.email !== undefined) patch.email = data.email;
+
+    if (Object.keys(patch).length === 0) {
+      res.status(200).json({ status: 'ok', updated: false });
+      return;
+    }
+    await db.update(customer).set(patch).where(eq(customer.id, data.customer_id));
+    res.status(200).json({ status: 'ok', updated: true });
+  } catch (err) {
+    console.error('[operator/customer] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
 }
@@ -775,11 +865,19 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const paymentParsed = donePaymentSchema.safeParse({
     payment_method: req.body?.payment_method,
     amount_cents: req.body?.amount_cents,
+    surcharge_cents: req.body?.surcharge_cents,
+    surcharge_reason: req.body?.surcharge_reason,
   });
   if (!paymentParsed.success) {
-    res.status(400).json({ status: 'invalid', message: 'payment_method or amount_cents is invalid' });
+    const first = paymentParsed.error.issues[0];
+    res.status(400).json({
+      status: 'invalid',
+      message: first?.message ?? 'payment_method, amount_cents or surcharge is invalid',
+    });
     return;
   }
+  const surchargeCents = paymentParsed.data.surcharge_cents ?? 0;
+  const surchargeReason = surchargeCents > 0 ? (paymentParsed.data.surcharge_reason ?? null) : null;
   const paymentMethod = paymentParsed.data.payment_method;
   const photoPairs = parsePhotoPairs(req.body);
   if (!photoPairs.ok) {
@@ -885,7 +983,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // not silently forfeit their balance. Reserved (decremented) up front so a
     // later Stripe decline can't hand out the same credit twice; the reduced
     // figure is what lands on the payment row, so a retry re-charges correctly.
-    const afterDiscountCents = finalChargeCents(effectiveBaseCents, discountCents);
+    // Surcharge lands on the bill before anything comes off it: a discount or
+    // referral credit reduces what they owe INCLUDING the extra work, which is
+    // what a customer would expect if you told them "$15 extra, but here's $10 off".
+    const chargeableBaseCents = effectiveBaseCents + surchargeCents;
+    const afterDiscountCents = finalChargeCents(chargeableBaseCents, discountCents);
     const creditAppliedCents = alreadyBilled
       ? 0
       : await spendCredit(db, row.customerId, afterDiscountCents);
@@ -924,6 +1026,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           amountCents: amount,
           discountCents,
           creditCents: creditAppliedCents,
+          surchargeCents,
+          surchargeReason,
           status: 'pending',
           method: 'qr',
         });
@@ -941,6 +1045,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         amountCents: amount,
         discountCents,
         creditCents: creditAppliedCents,
+        surchargeCents,
+        surchargeReason,
         status: 'succeeded',
         method: paymentMethod,
       });
@@ -962,6 +1068,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           amountCents: 0,
           discountCents,
           creditCents: creditAppliedCents,
+          surchargeCents,
+          surchargeReason,
           status: 'succeeded',
         });
         creditCommitted = true;
@@ -980,6 +1088,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           amountCents: amount,
           discountCents,
           creditCents: creditAppliedCents,
+          surchargeCents,
+          surchargeReason,
           status: 'pending',
         });
         // The pending row exists and records the credit, so it is accounted
@@ -1182,7 +1292,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           serviceDate: formatFriendlyDate(row.scheduledFor.toISOString().slice(0, 10)),
           paidDate: formatFriendlyDate(new Date().toISOString().slice(0, 10)),
           customerName: row.name,
-          address: `${row.street}, ${row.city} ${row.postalCode}`,
+          address: [row.street, [row.city, row.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', '),
           planLabel,
           binCount,
           // The effective (possibly operator-overridden) base, so the line
@@ -1190,6 +1300,8 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           baseCents: effectiveBaseCents,
           discountCents,
           creditCents: creditAppliedCents,
+          surchargeCents,
+          surchargeReason,
           totalCents: charge.amount_cents ?? 0,
           outcome:
             paymentMethod === 'cash'
@@ -1228,6 +1340,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       ratingBaseUrl,
       // Ask for the referral while the clean bin is still in front of them.
       // Renders below the star row so the Google-review funnel stays first.
+      surcharge: surchargeCents > 0 && surchargeReason ? { amountCents: surchargeCents, reason: surchargeReason } : null,
       referral: row.referralCode
         ? { code: row.referralCode, shareUrl: `${siteUrl}/?ref=${encodeURIComponent(row.referralCode)}` }
         : undefined,

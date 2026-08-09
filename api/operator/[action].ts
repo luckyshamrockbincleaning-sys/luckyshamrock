@@ -6,6 +6,7 @@ import {
   handleAttention,
   handleHistory,
   handleSeasonStart,
+  handleEditCustomer,
   handleAct,
   handleNewJob,
 } from '../../lib/operator-handlers.js';
@@ -39,6 +40,7 @@ const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promi
   attention: handleAttention,
   history: handleHistory,
   season: handleSeasonStart,
+  customer: handleEditCustomer,
   act: handleAct,
   job: handleNewJob,
 };

@@ -276,3 +276,31 @@ describe('doneTemplate — referral block', () => {
     expect(starIdx).toBeLessThan(referralIdx);
   });
 });
+
+describe('doneTemplate — extra charge', () => {
+  it('states the amount and the reason in the body', () => {
+    const t = doneTemplate({
+      name: 'Sam', nextVisitDate: null,
+      charge: { kind: 'charged', amountCents: 6000 },
+      surcharge: { amountCents: 1500, reason: 'Maggots and caked-on food' },
+    });
+    expect(t.html).toContain('$15.00');
+    expect(t.html).toContain('Maggots and caked-on food');
+    expect(t.text).toContain('Maggots and caked-on food');
+  });
+
+  it('says nothing when there is no extra charge', () => {
+    const t = doneTemplate({ name: 'Sam', nextVisitDate: null, charge: { kind: 'charged', amountCents: 4500 } });
+    expect(t.html).not.toMatch(/extra charge/i);
+    expect(t.text).not.toMatch(/included an extra/i);
+  });
+
+  it('escapes a reason containing HTML', () => {
+    const t = doneTemplate({
+      name: 'Sam', nextVisitDate: null,
+      surcharge: { amountCents: 1000, reason: '<script>alert(1)</script>' },
+    });
+    expect(t.html).not.toContain('<script>');
+    expect(t.html).toContain('&lt;script&gt;');
+  });
+});

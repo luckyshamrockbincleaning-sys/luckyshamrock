@@ -26,6 +26,9 @@ export interface ReceiptInput {
    * receipt's arithmetic would not add up.
    */
   creditCents?: number;
+  /** Operator's on-the-spot extra, with the reason the customer was given. */
+  surchargeCents?: number;
+  surchargeReason?: string | null;
   totalCents: number;
   /** How this clean was settled — drives the line under the total. */
   outcome: 'charged' | 'comped' | 'cash' | 'terminal';
@@ -82,6 +85,15 @@ export async function generateReceiptPdf(r: ReceiptInput): Promise<Buffer> {
   };
   const binLabel = r.binCount === 1 ? '1 bin' : `${r.binCount} bins`;
   line(`${r.planLabel} — garbage bin cleaning (${binLabel})`, cad(r.baseCents));
+  if ((r.surchargeCents ?? 0) > 0) {
+    line('Extra cleaning required', cad(r.surchargeCents ?? 0));
+    if (r.surchargeReason) {
+      // The reason sits under the amount in smaller grey type — a bare extra
+      // charge with no explanation is what turns into a chargeback.
+      page.drawText(r.surchargeReason.slice(0, 78), { x: left + 8, y, size: 7.5, font: helv, color: MUTED });
+      y -= 12;
+    }
+  }
   if ((r.creditCents ?? 0) > 0) {
     line('Referral credit', `-${cad(r.creditCents ?? 0)}`);
   }

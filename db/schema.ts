@@ -98,7 +98,10 @@ export const customer = pgTable(
     phone: text('phone'),
     street: text('street').notNull(),
     city: text('city').notNull(),
-    postalCode: varchar('postal_code', { length: 10 }).notNull(),
+    // Optional: self-serve bookings always supply one (it gates the service
+    // area), but a walk-up created at the door collects a phone number instead
+    // — the operator is standing at the address and does not need it.
+    postalCode: varchar('postal_code', { length: 10 }),
     pickupDay: pickupDayEnum('pickup_day').notNull(),
     // Where the operator can find the bin on service day (curb / side / garage /
     // back). Collected at booking; nullable for legacy rows.
@@ -266,6 +269,12 @@ export const payment = pgTable(
     // receipt line items still add up to the total paid, and so spent credit is
     // auditable after the fact.
     creditCents: integer('credit_cents').notNull().default(0),
+    // Operator's on-the-spot surcharge for a bin in an unusually bad state,
+    // with the reason shown to the customer on their receipt. An unexplained
+    // extra charge is the fastest way to a dispute, so the reason travels with
+    // the amount rather than living only in the operator's head.
+    surchargeCents: integer('surcharge_cents').notNull().default(0),
+    surchargeReason: text('surcharge_reason'),
     currency: varchar('currency', { length: 3 }).notNull().default('cad'),
     status: paymentRecordStatusEnum('status').notNull().default('pending'),
     method: paymentMethodEnum('method').notNull().default('card'),
@@ -283,5 +292,6 @@ export const payment = pgTable(
     // discount <= amount — only that neither goes negative.
     amountNonNegative: check('payment_amount_non_negative', sql`${t.amountCents} >= 0`),
     discountNonNegative: check('payment_discount_non_negative', sql`${t.discountCents} >= 0`),
+    surchargeNonNegative: check('payment_surcharge_non_negative', sql`${t.surchargeCents} >= 0`),
   }),
 );
