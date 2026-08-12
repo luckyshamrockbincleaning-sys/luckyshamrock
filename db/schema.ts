@@ -71,11 +71,12 @@ export const paymentStatusEnum = pgEnum('payment_status', [
   'refunded', // charge was refunded (e.g. from the Stripe dashboard)
   'paid_cash', // collected in cash at the door
   'paid_terminal', // collected via tap in the Stripe app; reconciled in Stripe
+  'paid_etransfer', // Interac e-transfer; reconciled in the bank, not in Stripe
   'awaiting_payment', // QR issued, waiting for checkout.session.completed
 ]);
 
 // How the money arrived. Lets revenue be split by channel later.
-export const paymentMethodEnum = pgEnum('payment_method', ['card', 'cash', 'terminal', 'qr']);
+export const paymentMethodEnum = pgEnum('payment_method', ['card', 'cash', 'terminal', 'qr', 'etransfer']);
 
 // Lifecycle of a single payment attempt (Phase 6 — Stripe).
 export const paymentRecordStatusEnum = pgEnum('payment_record_status', [

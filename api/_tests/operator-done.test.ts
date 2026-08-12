@@ -407,6 +407,38 @@ describe('POST /api/operator/visit/:id/done', () => {
     expect(rows[0]!.amountCents).toBe(4500); // one-off, 1 bin
   });
 
+  it('records an e-transfer without calling Stripe', async () => {
+    // Interac e-transfer is normal for this trade in Canada. Before it was a
+    // choice, an operator who took one had nothing truthful to tap: a real
+    // $57 job went out marked `unpaid` with no payment row at all.
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'etransfer' }), res);
+
+    expect(res.statusCode).toBe(200);
+    const db = getDb();
+    const [v] = await db.select().from(visit).where(eq(visit.id, v1));
+    expect(v!.status).toBe('done');
+    expect(v!.paymentStatus).toBe('paid_etransfer');
+    const rows = await db.select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.method).toBe('etransfer');
+    expect(rows[0]!.status).toBe('succeeded');
+    expect(rows[0]!.amountCents).toBe(4500);
+  });
+
+  it('honours an operator amount override on an e-transfer', async () => {
+    const c = await seedCustomer();
+    const v1 = await addVisit(c, '2026-07-24');
+    const res = mockRes();
+    await handler(await req(true, v1, 'POST', { payment_method: 'etransfer', amount_cents: 5700 }), res);
+    expect(res.statusCode).toBe(200);
+    const rows = await getDb().select().from(payment).where(eq(payment.visitId, v1));
+    expect(rows[0]!.amountCents).toBe(5700);
+  });
+
   it('honours an operator amount override on cash', async () => {
     const c = await seedCustomer();
     const v1 = await addVisit(c, '2026-07-24');

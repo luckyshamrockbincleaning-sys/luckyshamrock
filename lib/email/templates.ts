@@ -157,6 +157,8 @@ export function doneTemplate(p: {
    * - cash:     collected in cash at the door — no card was touched.
    * - terminal: collected via tap in the Stripe app (in person) — the
    *             customer's card on file was NOT charged.
+   * - etransfer: sent by Interac e-transfer — reconciled in the bank, not in
+   *             Stripe, and no card was touched.
    * - comped:   fully discounted — explicitly say no charge.
    * - failed:   card declined — tell the customer so the /manage banner isn't
    *             their first hint.
@@ -164,7 +166,7 @@ export function doneTemplate(p: {
    *             or a QR was issued but not yet paid (confirmation lands via
    *             a separate receipt email once the customer pays).
    */
-  charge?: { kind: 'charged' | 'cash' | 'terminal' | 'comped' | 'failed' | 'none'; amountCents?: number };
+  charge?: { kind: 'charged' | 'cash' | 'terminal' | 'etransfer' | 'comped' | 'failed' | 'none'; amountCents?: number };
   /**
    * An on-the-spot extra for a bin in an unusually bad state. Stated in the
    * email body as well as the attached receipt — plenty of people never open
@@ -234,6 +236,8 @@ export function doneTemplate(p: {
     chargeLine = `Paid in cash — thank you!`;
   } else if (p.charge?.kind === 'terminal') {
     chargeLine = `Paid by card in person.`;
+  } else if (p.charge?.kind === 'etransfer') {
+    chargeLine = `Paid by e-transfer — thank you!`;
   } else if (p.charge?.kind === 'comped') {
     chargeLine = `This clean was on us — no charge.`;
   } else if (p.charge?.kind === 'failed') {

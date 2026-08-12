@@ -71,7 +71,7 @@ const cleanPhotoSchema = z.object({
   content_base64: z.string().trim().min(1),
 });
 const donePaymentSchema = z.object({
-  payment_method: z.enum(['card_on_file', 'cash', 'terminal', 'qr']).default('card_on_file'),
+  payment_method: z.enum(['card_on_file', 'cash', 'terminal', 'qr', 'etransfer']).default('card_on_file'),
   // Operator override for doorstep deals ("$40 cash"). Server still floors it
   // at 0 and ignores absurd values; the default comes from lib/pricing.ts.
   amount_cents: z.number().int().min(0).max(100_000).optional(),
@@ -1046,9 +1046,17 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         creditCommitted = true;
         charge = { attempted: true, ok: true, amount_cents: amount };
       }
-    } else if (!alreadyBilled && (paymentMethod === 'cash' || paymentMethod === 'terminal')) {
+    } else if (
+      !alreadyBilled &&
+      (paymentMethod === 'cash' || paymentMethod === 'terminal' || paymentMethod === 'etransfer')
+    ) {
+      // Money that arrived outside Stripe. Recorded the same way regardless of
+      // channel; only the label differs, so revenue can still be split later.
       const amount = afterDiscountCents - creditAppliedCents;
-      const status = paymentMethod === 'cash' ? 'paid_cash' : 'paid_terminal';
+      const status =
+        paymentMethod === 'cash' ? 'paid_cash'
+        : paymentMethod === 'etransfer' ? 'paid_etransfer'
+        : 'paid_terminal';
       await db.update(visit).set({ paymentStatus: status }).where(eq(visit.id, visitId));
       await db.insert(payment).values({
         id: crypto.randomUUID(),
@@ -1197,7 +1205,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
           ? { kind: 'cash' }
           : paymentMethod === 'terminal'
             ? { kind: 'terminal' }
-            : !charge.ok
+            : paymentMethod === 'etransfer'
+              ? { kind: 'etransfer' }
+              : !charge.ok
               ? { kind: 'failed' }
               : charge.amount_cents === 0
                 ? { kind: 'comped' }
@@ -1320,9 +1330,11 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
               ? 'cash'
               : paymentMethod === 'terminal'
                 ? 'terminal'
-                : (charge.amount_cents ?? 0) === 0
-                  ? 'comped'
-                  : 'charged',
+                : paymentMethod === 'etransfer'
+                  ? 'etransfer'
+                  : (charge.amount_cents ?? 0) === 0
+                    ? 'comped'
+                    : 'charged',
         });
         photoAttachments.push({
           filename: 'LuckyShamrock-Receipt.pdf',

@@ -108,6 +108,7 @@ const PAY_BADGE = {
   comped: { label: 'comped', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
   paid_cash: { label: '💵 cash', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
   paid_terminal: { label: '🔖 tapped', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
+  paid_etransfer: { label: '🏦 e-transfer', color: '#1f7a1f', bg: 'var(--green-soft, #dfece1)' },
   awaiting_payment: { label: '⏳ awaiting payment', color: '#7a5a12', bg: '#FBF0D5' },
   unpaid: { label: '⚠ unpaid', color: '#7A2222', bg: '#F5DADA' },
   refunded: { label: '↩ refunded', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
@@ -634,6 +635,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
               ['qr', '📱 QR code'],
               ['terminal', '🔖 Tap in Stripe'],
               ['cash', '💵 Cash'],
+              ['etransfer', '🏦 E-transfer'],
             ].map(([value, label]) => (
               <button
                 key={value}

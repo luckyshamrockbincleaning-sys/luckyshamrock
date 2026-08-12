@@ -31,7 +31,7 @@ export interface ReceiptInput {
   surchargeReason?: string | null;
   totalCents: number;
   /** How this clean was settled — drives the line under the total. */
-  outcome: 'charged' | 'comped' | 'cash' | 'terminal';
+  outcome: 'charged' | 'comped' | 'cash' | 'terminal' | 'etransfer';
 }
 
 const GREEN = rgb(0.114, 0.478, 0.239); // #1d7a3d
@@ -115,7 +115,9 @@ export async function generateReceiptPdf(r: ReceiptInput): Promise<Buffer> {
         ? 'Paid in cash — thank you!'
         : r.outcome === 'terminal'
           ? 'Paid by card in person.'
-          : 'Paid by card on file.';
+          : r.outcome === 'etransfer'
+            ? 'Paid by e-transfer — thank you!'
+            : 'Paid by card on file.';
   page.drawText(paidByLine, { x: left, y, size: 9, font: helv, color: MUTED });
 
   // Footer
