@@ -144,6 +144,13 @@ const Booking = ({ tweaks }) => {
   });
   const [submitState, setSubmitState] = useStateBk({ phase: 'idle' });
   const [paymentState, setPaymentState] = useStateBk({ phase: 'idle' });
+  // The Stripe card Element, and whether it has actually rendered. Kept apart
+  // from paymentState because "we asked Stripe for a form" and "the form is on
+  // screen and usable" are different facts, and conflating them is what let a
+  // blank box reach customers.
+  const paymentElRef = useRef(null);
+  const paymentMountedRef = useRef(false);
+  const [cardReady, setCardReady] = useStateBk(false);
   // Referral: a neighbour who was texted a link arrives with ?ref=K7M2QX;
   // someone told over the fence types the code instead. Both must work.
   const [referral, setReferral] = useStateBk({ code: '', valid: false, firstName: '', checking: false });
@@ -271,17 +278,33 @@ const Booking = ({ tweaks }) => {
       const elements = stripe.elements({ clientSecret: data.client_secret });
       const paymentEl = elements.create('payment');
 
+      // Stripe tells us when the form is genuinely on screen. Until then the
+      // Save button stays disabled — tapping it early is what produced the
+      // "could not retrieve data from the specified Element" error a customer
+      // hit on a phone.
+      paymentEl.on('ready', () => setCardReady(true));
+      paymentEl.on('loaderror', (e) => {
+        setPaymentState({
+          phase: 'error',
+          message: (e && e.error && e.error.message) || 'The secure card form could not load. Please try again.',
+        });
+      });
+
       stripeRef.current = stripe;
       elementsRef.current = elements;
+      paymentElRef.current = paymentEl;
+      paymentMountedRef.current = false;
+      setCardReady(false);
       paymentSetupRef.current = {
         stripe_customer_id: data.stripe_customer_id,
         setup_intent_id: data.setup_intent_id,
       };
+      // Mounting happens in the effect below, AFTER React has put the
+      // container in the DOM. Doing it here (even via setTimeout 0) raced the
+      // render: on a slow phone the node did not exist yet, mount() was
+      // skipped, and the customer was left with an empty white box and no way
+      // to finish booking.
       setPaymentState({ phase: 'ready' });
-      setTimeout(() => {
-        const mountPoint = document.getElementById('booking-card-element');
-        if (mountPoint) paymentEl.mount('#booking-card-element');
-      }, 0);
     } catch (err) {
       setPaymentState({ phase: 'error', message: err.message || 'Could not load secure card form.' });
     }
@@ -289,6 +312,10 @@ const Booking = ({ tweaks }) => {
 
   async function savePaymentMethod() {
     if (!stripeRef.current || !elementsRef.current) return;
+    if (!cardReady) {
+      setPaymentState({ phase: 'ready', message: 'The card form is still loading — give it a second and try again.' });
+      return;
+    }
     setPaymentState({ phase: 'saving' });
     try {
       const { error } = await stripeRef.current.confirmSetup({
@@ -302,6 +329,24 @@ const Booking = ({ tweaks }) => {
       setPaymentState({ phase: 'ready', message: err.message || 'Could not save this card.' });
     }
   }
+
+  // Mount the card form once its container exists. useEffect runs after React
+  // has committed the DOM, which is the guarantee the old setTimeout lacked.
+  React.useEffect(() => {
+    if (paymentState.phase !== 'ready') return;
+    if (!paymentElRef.current || paymentMountedRef.current) return;
+    const node = document.getElementById('booking-card-element');
+    if (!node) return;
+    try {
+      paymentElRef.current.mount(node);
+      paymentMountedRef.current = true;
+    } catch (err) {
+      setPaymentState({
+        phase: 'error',
+        message: 'The secure card form could not load. Please try again.',
+      });
+    }
+  }, [paymentState.phase]);
 
   // ===== Submit to /api/book =====
   async function submitBooking() {
@@ -727,6 +772,11 @@ const Booking = ({ tweaks }) => {
                 {(paymentState.phase === 'ready' || paymentState.phase === 'saving') && (
                   <div>
                     <div id="booking-card-element" style={{padding: 14, border: '1px solid var(--line)', borderRadius: 12, background: 'white'}} />
+                    {!cardReady && (
+                      <div style={{marginTop: 10, textAlign: 'center', color: 'var(--ink-3)', fontSize: 14}}>
+                        Loading secure card form…
+                      </div>
+                    )}
                     {paymentState.message && (
                       <div className="booking-error" style={{marginTop: 12}}>
                         <p>{paymentState.message}</p>
@@ -735,7 +785,7 @@ const Booking = ({ tweaks }) => {
                     <button
                       className="btn btn-primary"
                       onClick={savePaymentMethod}
-                      disabled={paymentState.phase === 'saving'}
+                      disabled={paymentState.phase === 'saving' || !cardReady}
                       style={{width: '100%', marginTop: 14}}
                     >
                       {paymentState.phase === 'saving' ? 'Saving…' : 'Save card'}
