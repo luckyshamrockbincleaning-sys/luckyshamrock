@@ -118,6 +118,30 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
 
 **Booking write atomicity:** `/api/book` wraps customer + subscription + visit + magic_link_token writes in one `db.transaction(...)`; email sends and best-effort Stripe customer provisioning stay outside the transaction.
 
+**An address we can't deliver to is rejected at booking.** `lib/email-domain.ts`
+`checkEmailDomain()` does an MX lookup and `/api/book` returns **422
+`email_undeliverable`** on a definitive miss — checked on the `payment_setup`
+intent (before the customer types a card, so a typo costs a correction rather
+than a re-entered card) and again at final confirmation. Rules that matter:
+
+- **It fails OPEN.** Only `ENOTFOUND`/`ENODATA`/an empty answer are
+  `undeliverable`; a timeout, SERVFAIL, or unparseable address is `unknown` and
+  the booking proceeds. Never lose a sale to flaky DNS.
+- **No MX means undeliverable even if the domain has an A record.** RFC 5321's
+  implicit-MX fallback is legal but in practice an A-only "mail domain" is a
+  typosquatter (`gmial.com` is one), and delivering to a squatter is worse than
+  bouncing. An RFC 7505 null MX (`0 .`, which `example.com` publishes) is also
+  undeliverable.
+- **It never touches the network under `npm test`** (`LUCKYSHAMROCK_TEST_RUN`),
+  because the suite books hundreds of `@example.com` customers. Tests that mean
+  to exercise the logic inject a resolver, which still runs.
+- `suggestEmailFix()` turns a known typo domain into "Did you mean …?" — the
+  message must stay actionable, since the customer has to fix it to buy.
+- Written after a real customer paid $57 with `@hotmail.co` (no such domain) and
+  all four of her emails bounced while `notification_log` recorded four
+  successful sends. **"Sent" still does not mean "delivered"** — bounce handling
+  does not exist.
+
 ## Auth + email conventions (Phase 2+)
 
 - **Session cookies** are HS256 JWTs signed with `SESSION_SECRET`. Use `signSessionCookie` / `verifySessionCookie` from `lib/cookies.ts`. Cookie name: `ls_session`. 30-day absolute TTL. HTTP-only, Secure, SameSite=Lax. Sliding renewal lives in Phase 3.
@@ -295,7 +319,12 @@ Schema drift requires re-running `drizzle-kit push --force` against the test URL
   Interpolating it directly renders "Fort Saskatchewan null" into Maps links and
   receipts.
 - **Walk-up field order is name → street → phone → bins → email**, matching how
-  the conversation actually goes at a gate. Only `street` is required.
+  the conversation actually goes at a gate. `street` is required, **and so is
+  at least one of `phone` / `email`** — a walk-up with neither is a customer
+  nobody can ever contact, which is how a $57 job on Woodbend Way went unpaid
+  and unchaseable in August 2026. Enforced in `newJobSchema.superRefine` and
+  mirrored in the `/ops` form so the operator sees it while the customer is
+  still standing there.
 - **`POST /api/operator/customer` patches a customer's details** (name, street,
   city, phone, email) — only the fields supplied. Details typed one-handed at a
   gate get typos, and customers often give an email only after the job is done.

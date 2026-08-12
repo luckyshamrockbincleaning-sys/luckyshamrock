@@ -276,6 +276,12 @@ function NewJobCard({ onCreated }) {
       setErr('Street address is required.');
       return;
     }
+    // Caught here as well as on the server so the operator sees it while the
+    // customer is still standing there, not after they've walked away.
+    if (!form.phone.trim() && !form.email.trim()) {
+      setErr('Add a phone number or an email — without one there is no way to reach them if the payment fails.');
+      return;
+    }
     setBusy(true);
     try {
       const body = {
@@ -333,13 +339,16 @@ function NewJobCard({ onCreated }) {
       <Flash kind="err" text={err} />
       <input style={field} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
-      <input style={field} type="tel" inputMode="tel" placeholder="Phone number" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+      <input style={field} type="tel" inputMode="tel" placeholder="Phone number *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
       <select style={field} value={form.bin_count} onChange={(e) => setForm({ ...form, bin_count: e.target.value })}>
         <option value={1}>1 bin</option>
         <option value={2}>2 bins</option>
         <option value={3}>3 bins</option>
       </select>
-      <input style={field} type="email" inputMode="email" placeholder="Email (optional — for receipt &amp; photos)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      <input style={field} type="email" inputMode="email" placeholder="Email (for receipt &amp; photos)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+      <p style={{ margin: '-2px 0 8px', fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>
+        Phone or email — at least one. It&rsquo;s the only way to reach them if the card fails.
+      </p>
 
       <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
         When?

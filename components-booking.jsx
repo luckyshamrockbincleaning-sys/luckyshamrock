@@ -269,6 +269,12 @@ const Booking = ({ tweaks }) => {
         }),
       });
       const data = await response.json().catch(() => ({}));
+      // An address we can't deliver to isn't a payment problem — "Try again"
+      // with the same typo would just fail again. Send them back to fix it.
+      if (response.status === 422 && data.status === 'email_undeliverable') {
+        setPaymentState({ phase: 'bad_email', message: data.message });
+        return;
+      }
       if (!response.ok || data.status !== 'ok') {
         throw new Error(data.message || 'Card setup is unavailable right now.');
       }
@@ -800,6 +806,19 @@ const Booking = ({ tweaks }) => {
                     </div>
                     <h3>Card saved. No charge today.</h3>
                     <p>You're ready to confirm the booking.</p>
+                  </div>
+                )}
+
+                {paymentState.phase === 'bad_email' && (
+                  <div className="booking-error" style={{marginTop: 18}}>
+                    <p>{paymentState.message}</p>
+                    <button
+                      className="btn btn-primary"
+                      style={{marginTop: 12}}
+                      onClick={() => { setPaymentState({ phase: 'idle' }); setStep(3); }}
+                    >
+                      Fix my email
+                    </button>
                   </div>
                 )}
 

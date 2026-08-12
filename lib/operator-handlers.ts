@@ -102,6 +102,18 @@ const newJobSchema = z
     scheduled_for: z.string().regex(DATE_RE, 'scheduled_for must be YYYY-MM-DD').optional(),
   })
   .superRefine((data, ctx) => {
+    // A walk-up with neither phone nor email is a customer we can never
+    // contact again. That is not hypothetical: a $57 job on Woodbend Way went
+    // unpaid in August 2026 and there was no way to chase it — no number, no
+    // address to email, nothing but a street. "What's a good number in case I
+    // need to reach you?" is a normal thing to ask at a gate.
+    if (!data.phone && !data.email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Add a phone number or an email — without one there is no way to reach this customer if the payment fails.',
+        path: ['phone'],
+      });
+    }
     if (!data.scheduled_for) return;
     if (!parseDateOnlyUtcNoon(data.scheduled_for)) {
       ctx.addIssue({

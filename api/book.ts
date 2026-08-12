@@ -24,6 +24,7 @@ import { isStripeConfigured } from '../lib/stripe.js';
 import { formatFriendlyDate } from '../lib/dates.js';
 import { effectiveStartDate } from '../lib/launch.js';
 import { isInSeason, seasonEnd } from '../lib/season.js';
+import { checkEmailDomain, undeliverableEmailMessage } from '../lib/email-domain.js';
 
 // How many future visits to generate per cadence at booking time.
 const RECURRING_COUNT: Record<Cadence, number> = {
@@ -64,6 +65,17 @@ export default async function handler(
         res.status(422).json({
           status: 'out_of_area',
           message: "We don't serve your area yet. Join the waitlist and we'll let you know when we do.",
+        });
+        return;
+      }
+
+      // Caught here rather than at final confirmation on purpose: this is the
+      // step BEFORE they type a card number, so a typo costs them a correction
+      // instead of a re-entered card.
+      if ((await checkEmailDomain(setupParsed.data.email)) === 'undeliverable') {
+        res.status(422).json({
+          status: 'email_undeliverable',
+          message: undeliverableEmailMessage(setupParsed.data.email),
         });
         return;
       }
@@ -164,6 +176,17 @@ export default async function handler(
     res.status(422).json({
       status: 'out_of_area',
       message: "We don't serve your area yet. Join the waitlist and we'll let you know when we do.",
+    });
+    return;
+  }
+
+  // Belt and braces — the payment_setup step already checks this, but a caller
+  // that skips straight to confirmation must not create a customer we can
+  // never email a receipt to.
+  if ((await checkEmailDomain(data.email)) === 'undeliverable') {
+    res.status(422).json({
+      status: 'email_undeliverable',
+      message: undeliverableEmailMessage(data.email),
     });
     return;
   }

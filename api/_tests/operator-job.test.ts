@@ -65,12 +65,51 @@ describe('POST /api/operator/job (walk-up)', () => {
 
   it('generates a placeholder email when none is given', async () => {
     const res = mockRes();
-    await handler(await req(true, { street: '11 Curb Lane', postal_code: 'T8L 0A1', bin_count: 2 }), res);
+    await handler(
+      await req(true, { street: '11 Curb Lane', postal_code: 'T8L 0A1', bin_count: 2, phone: '780-555-0134' }),
+      res,
+    );
 
     expect(res.statusCode).toBe(201);
     const rows = await getDb().select().from(customer);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.email).toMatch(/^walkup\+[0-9a-f]{8}@luckyshamrock\.ca$/);
+  });
+
+  describe('reachability', () => {
+    // Written after 73 Woodbend Way: a $57 walk-up with no phone and no email,
+    // done and never paid, with no way to follow up short of driving there.
+    it('rejects a job with neither a phone number nor an email', async () => {
+      const res = mockRes();
+      await handler(await req(true, { street: '73 Woodbend Way', bin_count: 2 }), res);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.status).toBe('invalid');
+      expect(res.body.errors.phone?.[0]).toMatch(/phone number or an email/i);
+      expect(await getDb().select().from(customer)).toHaveLength(0);
+      expect(await getDb().select().from(visit)).toHaveLength(0);
+    });
+
+    it('accepts a phone alone', async () => {
+      const res = mockRes();
+      await handler(await req(true, { street: '73 Woodbend Way', phone: '780-667-9919' }), res);
+      expect(res.statusCode).toBe(201);
+      const [c] = await getDb().select().from(customer);
+      expect(c!.phone).toBe('780-667-9919');
+    });
+
+    it('accepts an email alone', async () => {
+      const res = mockRes();
+      await handler(await req(true, { street: '73 Woodbend Way', email: 'dona@example.com' }), res);
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('rejects a blank phone string as no phone at all', async () => {
+      const res = mockRes();
+      await handler(await req(true, { street: '73 Woodbend Way', phone: '   ' }), res);
+      expect(res.statusCode).toBe(400);
+      expect(await getDb().select().from(visit)).toHaveLength(0);
+    });
   });
 
   it('reuses an existing customer with the same email', async () => {
@@ -147,7 +186,7 @@ describe('POST /api/operator/job (walk-up)', () => {
 
   it('sends no customer email to a placeholder walk-up address on Done', async () => {
     const res = mockRes();
-    await handler(await req(true, { street: '12 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1 }), res);
+    await handler(await req(true, { street: '12 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1, phone: '780-555-0112' }), res);
     expect(res.statusCode).toBe(201);
 
     const { visit_id } = res.body as { visit_id: string };
@@ -165,7 +204,7 @@ describe('POST /api/operator/job (walk-up)', () => {
 
   it('sends no customer email to a placeholder walk-up address on Notify', async () => {
     const res = mockRes();
-    await handler(await req(true, { street: '13 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1 }), res);
+    await handler(await req(true, { street: '13 Curb Lane', postal_code: 'T8L 0A1', bin_count: 1, phone: '780-555-0113' }), res);
     expect(res.statusCode).toBe(201);
 
     const { visit_id } = res.body as { visit_id: string };
@@ -311,9 +350,11 @@ describe('POST /api/operator/job (walk-up)', () => {
 
     it('sends NO confirmation for a future job booked without an email (placeholder address)', async () => {
       const target = isoPlusDays(edmontonTodayISO(), 14);
+      // Phone but no email: reachable, so the job is allowed, but there is no
+      // address to send a written confirmation to.
       const { email: _drop, ...noEmail } = validJob;
       const res = mockRes();
-      await handler(await req(true, { ...noEmail, scheduled_for: target }), res);
+      await handler(await req(true, { ...noEmail, phone: '780-555-0155', scheduled_for: target }), res);
 
       expect(res.statusCode).toBe(201);
       expect(res.body.confirmation_sent).toBe(false);
@@ -369,9 +410,10 @@ describe('walk-up form: phone instead of postal code, and editing', () => {
     expect(c!.street).toBe('9 Curb Lane');
   });
 
-  it('still works with no phone at all', async () => {
+  it('works with no phone as long as an email was given', async () => {
+    // Phone is not individually mandatory — one of the two is.
     const res = mockRes();
-    await handler(await req(true, { street: '11 Curb Lane', bin_count: 1 }), res);
+    await handler(await req(true, { street: '11 Curb Lane', bin_count: 1, email: 'nophone@example.com' }), res);
     expect(res.statusCode).toBe(201);
   });
 
@@ -420,7 +462,7 @@ describe('POST /api/operator/customer — fix a walk-up\'s details', () => {
     const a = mockRes();
     await handler(await req(true, { street: '1 A St', email: 'taken@example.com', bin_count: 1 }), a);
     const b = mockRes();
-    await handler(await req(true, { street: '2 B St', bin_count: 1 }), b);
+    await handler(await req(true, { street: '2 B St', bin_count: 1, phone: '780-555-0102' }), b);
 
     const res = mockRes();
     await handleEditCustomer(await editReq(true, { customer_id: b.body.customer_id, email: 'taken@example.com' }), res);
