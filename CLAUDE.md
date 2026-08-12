@@ -258,16 +258,27 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   `payment` row + `visit.payment_status` to `refunded`; without it, a dashboard
   refund leaves the row showing `charged`).
 - **Doorstep payments.** `POST /api/operator/act {op:'done'}` takes
-  `payment_method` ∈ {card_on_file (default), cash, terminal, qr} and an
-  optional `amount_cents` override (server clamps 0–100000; blank = standard
-  price). cash/terminal record a succeeded `payment` row with that `method` and
-  set `visit.payment_status` to `paid_cash`/`paid_terminal` — no Stripe call.
+  `payment_method` ∈ {card_on_file (default), cash, terminal, qr, etransfer}
+  and an optional `amount_cents` override (server clamps 0–100000; blank =
+  standard price). cash/terminal/etransfer record a succeeded `payment` row
+  with that `method` and set `visit.payment_status` to
+  `paid_cash`/`paid_terminal`/`paid_etransfer` — no Stripe call.
   qr creates a Stripe **Checkout Session** (`lib/billing.ts
   createDoorstepCheckoutSession`), returns `payment_url` for /ops to render as a
   QR, and leaves the visit `awaiting_payment` until
   `checkout.session.completed` lands (webhook locates the pending payment row
   scoped by `visitId`, `status='pending'`, and `method='qr'`). **That event MUST
   be in the live webhook's event list** or QR payments never confirm.
+- **E-transfer (migration 0014) exists because its absence cost a record.**
+  Interac e-transfer is normal for this trade in Canada; with only
+  card/QR/terminal/cash on the Done screen, an operator who took one had
+  nothing truthful to tap, and a real $57 job went out `unpaid` with **no
+  `payment` row at all**. Like `terminal` it is **not** auto-reconciled — the
+  money lands in the bank and tapping Done is what records it. **Any new
+  settlement channel needs its own `payment_method` value, its own
+  `payment_status`, and its own branch in `doneTemplate` + `receipt-pdf.ts`** —
+  falling through to the `charged` branch tells a customer who paid another way
+  that "your card on file was charged", which is false.
 - **Tap to Pay is native-SDK only** (Stripe iOS/Android/React Native). It cannot
   work in the /ops web page. The `terminal` method means "operator collected in
   the Stripe app"; it is reconciled in Stripe by amount/time, not auto-linked.
