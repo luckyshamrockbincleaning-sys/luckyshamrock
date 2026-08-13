@@ -2,7 +2,7 @@
 // Loaded from /ops/index.html. The matching app entry in /ops/app-ops.jsx
 // mounts <OpsApp/> into #root. Password-gated; talks to /api/operator/*.
 
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -938,14 +938,29 @@ function SeasonOpenCard() {
 function OpsApp() {
   const [authed, setAuthed] = useState(null); // null = unknown, true, false
   const [view, setView] = useState('today'); // 'today' | 'upcoming' | 'attention'
-  const [data, setData] = useState({ loading: true, stops: [], date: null });
+  // `view` tracks which tab's data this is. Tapping a tab changes `view`
+  // immediately, but the fetch only starts in an effect AFTER that render
+  // commits — so without this tag there is one paint where the new tab is
+  // asked to render the OLD tab's rows. The cards take different shapes
+  // (AttentionCard wants item.customer, StopCard doesn't), so that paint
+  // threw and blanked the whole app. Render rows only when the data on hand
+  // was loaded for the tab being shown.
+  const [data, setData] = useState({ loading: true, stops: [], date: null, view: null });
   const [flash, setFlash] = useState({ kind: '', text: '' });
   const [busy, setBusy] = useState(false);
   // QR from the most recent Done tap — lifted up here (not in StopCard) so it
   // survives the list reload that follows every Done. See QrPanel.
   const [qr, setQr] = useState(null);
 
+  // Two taps in quick succession leave two fetches in flight. If the older one
+  // answers last it would stamp the data with the wrong tab, and the check
+  // above would then hold the spinner on screen forever. Only the newest
+  // request is allowed to write.
+  const loadToken = useRef(0);
+
   const load = useCallback(async (which) => {
+    const token = ++loadToken.current;
+    const isStale = () => token !== loadToken.current;
     setData((d) => ({ ...d, loading: true }));
     const url =
       which === 'upcoming' ? '/api/operator/upcoming'
@@ -955,16 +970,19 @@ function OpsApp() {
     try {
       const r = await fetch(url, { credentials: 'same-origin' });
       if (r.status === 401) {
+        if (isStale()) return;
         setAuthed(false);
-        setData({ loading: false, stops: [], date: null });
+        setData({ loading: false, stops: [], date: null, view: which });
         return;
       }
       const b = await r.json();
       if (!r.ok) throw new Error(b.message || 'Could not load.');
+      if (isStale()) return;
       setAuthed(true);
-      setData({ loading: false, stops: b.visits || [], date: b.date || null, hasMore: !!b.has_more });
+      setData({ loading: false, stops: b.visits || [], date: b.date || null, hasMore: !!b.has_more, view: which });
     } catch (e) {
-      setData({ loading: false, stops: [], date: null });
+      if (isStale()) return;
+      setData({ loading: false, stops: [], date: null, view: which });
       setFlash({ kind: 'err', text: e.message });
     }
   }, []);
@@ -1171,7 +1189,7 @@ function OpsApp() {
 
       <QrPanel qr={qr} onDismiss={() => setQr(null)} />
 
-      {data.loading ? (
+      {data.loading || data.view !== view ? (
         <div className="ops-card"><p>Loading…</p></div>
       ) : data.stops.length === 0 ? (
         <div className="ops-card">
@@ -1206,5 +1224,51 @@ function OpsApp() {
   );
 }
 
+// A render error used to take the whole page down to blank white — no tabs, no
+// way back, nothing to report. That's a bad thing to hand someone standing in a
+// customer's driveway. Whatever breaks, the operator still gets a screen that
+// says so and a way out.
+class OpsErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+
+  componentDidCatch(err, info) {
+    console.error('[ops] render crashed', err, info);
+  }
+
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="ops-wrap">
+        <div className="ops-card">
+          <h2 style={{ marginTop: 0, fontSize: 17 }}>Something broke on this screen</h2>
+          <p className="muted">
+            Your jobs and payments are safe — this is a display problem, not lost work.
+            Reload to carry on.
+          </p>
+          <button
+            className="btn btn-primary ops-btn"
+            style={{ width: '100%', marginTop: 8 }}
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </button>
+          {/* Verbatim, so a screenshot is enough to debug it. */}
+          <p className="muted" style={{ fontSize: 12, marginTop: 12, wordBreak: 'break-word' }}>
+            {String(this.state.err && this.state.err.message ? this.state.err.message : this.state.err)}
+          </p>
+        </div>
+      </div>
+    );
+  }
+}
+
 // Expose to the app entry
 window.OpsApp = OpsApp;
+window.OpsErrorBoundary = OpsErrorBoundary;
