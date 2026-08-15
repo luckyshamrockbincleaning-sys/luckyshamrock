@@ -272,9 +272,11 @@ describe('POST /api/operator/visit/:id/done', () => {
       // reported separately from bin 1, not folded into hasPhoto/hasBeforePhoto.
       expect(spy.mock.calls[0]![0].hasPhoto).toBe(true);
       expect(spy.mock.calls[0]![0].hasBeforePhoto).toBe(true);
+      // label is null because this fixture books by count with no bin_types —
+      // the email then falls back to "Bin 2"/"Bin 3".
       expect(spy.mock.calls[0]![0].extraBins).toEqual([
-        { hasBefore: false, hasAfter: true },
-        { hasBefore: true, hasAfter: true },
+        { hasBefore: false, hasAfter: true, label: null },
+        { hasBefore: true, hasAfter: true, label: null },
       ]);
       spy.mockRestore();
     });
@@ -300,7 +302,7 @@ describe('POST /api/operator/visit/:id/done', () => {
       expect(res.statusCode).toBe(200);
       expect(spy.mock.calls[0]![0].hasWashGif).toBe(true);
       // Bin 2 never gets a GIF, even though bin 1's real photos succeeded.
-      expect(spy.mock.calls[0]![0].extraBins).toEqual([{ hasBefore: true, hasAfter: true }]);
+      expect(spy.mock.calls[0]![0].extraBins).toEqual([{ hasBefore: true, hasAfter: true, label: null }]);
       spy.mockRestore();
     }, 30_000);
 

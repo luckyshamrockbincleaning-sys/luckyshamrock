@@ -329,6 +329,23 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   and the server through `[street, [city, postal].filter(Boolean).join(' ')]`.
   Interpolating it directly renders "Fort Saskatchewan null" into Maps links and
   receipts.
+- **A booking says WHICH bins, not just how many.** `lib/bin-types.ts` is the
+  vocabulary (`garbage`/`organics`/`recycling`); `bin_types text[]` sits beside
+  `bin_count` on both `subscription` and `visit` (migration 0015). Rules:
+  - **`bin_count` stays the source of truth for money and photo pairing.**
+    `bin_types` is the descriptive companion, and CHECK constraints
+    (`*_bin_types_match_count`) stop them drifting. A request whose types and
+    count disagree is **rejected**, never reconciled — trusting the smaller
+    number would clean three bins for the price of one.
+  - **It is NULLABLE and must stay optional.** Three live subscriptions predate
+    it. Every render path goes through `describeBins()`, which falls back to
+    "2 bins".
+  - **Stored order is canonical** (`normalizeBinTypes` sorts to `BIN_TYPES`
+    order) because photos, the per-bin email sections and the receipt are keyed
+    by position — "bin 1" has to mean the same bin every visit.
+  - The client list lives in `pricing.js` (`window.LS_BIN_TYPES`) with
+    `lib/_tests/bin-types-sync.test.ts` as the drift guard, same pattern as
+    prices. No build step means the browser can't import the server module.
 - **Walk-up field order is name → street → phone → bins → email**, matching how
   the conversation actually goes at a gate. `street` is required, **and so is
   at least one of `phone` / `email`** — a walk-up with neither is a customer

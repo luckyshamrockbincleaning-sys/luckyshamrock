@@ -135,7 +135,11 @@ export function doneTemplate(p: {
    * anti-testimonial rule as bin 1: a bin with `hasBefore` but not `hasAfter`
    * renders nothing for that bin.
    */
-  extraBins?: Array<{ hasBefore: boolean; hasAfter: boolean }>;
+  /**
+   * Bins 2+. `label` names the bin ("Green bin") when the booking told us
+   * which; it falls back to "Bin 2" for plans booked before we asked.
+   */
+  extraBins?: Array<{ hasBefore: boolean; hasAfter: boolean; label?: string | null }>;
   /**
    * The customer's own referral code, so a happy customer can pass it to a
    * neighbour while the clean bin is still in front of them. Rendered BELOW
@@ -216,15 +220,16 @@ export function doneTemplate(p: {
   const extraBinsHtml = shownExtraBins
     .map((bin, i) => {
       const n = i + 2;
+      const name = escapeHtml(bin.label || `Bin ${n}`);
       const beforeRows = bin.hasBefore
-        ? `<tr><td style="${photoLabelStyle};color:#8a6d3b;padding-top:16px">Bin ${n} — Before</td></tr>` +
-          `<tr><td><img src="cid:${binBeforePhotoCid(n)}" alt="Bin ${n} before cleaning" style="${photoImgStyle}"></td></tr>` +
-          `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:12px">Bin ${n} — After ✨</td></tr>`
-        : `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:16px">Bin ${n} ✨</td></tr>`;
+        ? `<tr><td style="${photoLabelStyle};color:#8a6d3b;padding-top:16px">${name} — Before</td></tr>` +
+          `<tr><td><img src="cid:${binBeforePhotoCid(n)}" alt="${name} before cleaning" style="${photoImgStyle}"></td></tr>` +
+          `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:12px">${name} — After ✨</td></tr>`
+        : `<tr><td style="${photoLabelStyle};color:#1d7a3d;padding-top:16px">${name} ✨</td></tr>`;
       return (
         `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:340px;margin:0 auto">` +
         beforeRows +
-        `<tr><td><img src="cid:${binAfterPhotoCid(n)}" alt="Bin ${n} after cleaning" style="${photoImgStyle}"></td></tr>` +
+        `<tr><td><img src="cid:${binAfterPhotoCid(n)}" alt="${name} after cleaning" style="${photoImgStyle}"></td></tr>` +
         `</table>`
       );
     })

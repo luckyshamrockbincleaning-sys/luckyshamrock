@@ -76,6 +76,39 @@ describe('POST /api/operator/job (walk-up)', () => {
     expect(rows[0]!.email).toMatch(/^walkup\+[0-9a-f]{8}@luckyshamrock\.ca$/);
   });
 
+  describe('which bins', () => {
+    it('records the bins the operator ticked', async () => {
+      const res = mockRes();
+      await handler(
+        await req(true, { street: '9 Curb Lane', phone: '780-555-0170', bin_count: 2, bin_types: ['organics', 'garbage'] }),
+        res,
+      );
+      expect(res.statusCode).toBe(201);
+      const [v] = await getDb().select().from(visit);
+      expect(v!.binCount).toBe(2);
+      // Canonical order, not the order they were tapped.
+      expect(v!.binTypes).toEqual(['garbage', 'organics']);
+    });
+
+    it('still works without bin_types', async () => {
+      const res = mockRes();
+      await handler(await req(true, { street: '9 Curb Lane', phone: '780-555-0171', bin_count: 1 }), res);
+      expect(res.statusCode).toBe(201);
+      const [v] = await getDb().select().from(visit);
+      expect(v!.binTypes).toBeNull();
+    });
+
+    it('rejects a count that disagrees with the bins listed', async () => {
+      const res = mockRes();
+      await handler(
+        await req(true, { street: '9 Curb Lane', phone: '780-555-0172', bin_count: 1, bin_types: ['garbage', 'organics'] }),
+        res,
+      );
+      expect(res.statusCode).toBe(400);
+      expect(await getDb().select().from(visit)).toHaveLength(0);
+    });
+  });
+
   describe('reachability', () => {
     // Written after 73 Woodbend Way: a $57 walk-up with no phone and no email,
     // done and never paid, with no way to follow up short of driving there.

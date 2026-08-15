@@ -4,6 +4,21 @@
 
 const { useState, useEffect, useCallback, useRef } = React;
 
+// Which bins a job can cover. Single client source (window.LS_BIN_TYPES from
+// /pricing.js), guarded against lib/bin-types.ts by bin-types-sync.test.ts.
+const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
+  { value: 'garbage', label: 'Black \u00b7 garbage', swatch: '#3a3a3c' },
+  { value: 'organics', label: 'Green \u00b7 organics', swatch: '#2f7d32' },
+  { value: 'recycling', label: 'Blue \u00b7 recycling', swatch: '#1f6fb2' },
+];
+const BIN_SHORT = { garbage: 'Black bin', organics: 'Green bin', recycling: 'Blue bin' };
+// Mirrors describeBins() in lib/bin-types.ts: name the bins when we know
+// them, fall back to the count for jobs booked before we asked.
+function describeBins(types, count) {
+  if (!Array.isArray(types) || types.length === 0) return `${count} bin${count === 1 ? '' : 's'}`;
+  return types.map((t) => BIN_SHORT[t] || t).join(' + ');
+}
+
 function formatDate(iso) {
   if (!iso) return '';
   // iso is YYYY-MM-DD — parse at local noon so the weekday doesn't shift.
@@ -261,7 +276,7 @@ function NewJobCard({ onCreated }) {
   // Field order matches how the conversation actually goes at a gate: who are
   // you, where, how do I reach you, how many bins, and an email if you'll give
   // one. No postal code — the operator is standing at the address.
-  const emptyForm = { name: '', street: '', phone: '', bin_count: 1, email: '', scheduled_for: '' };
+  const emptyForm = { name: '', street: '', phone: '', bin_types: ['garbage'], email: '', scheduled_for: '' };
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
@@ -287,7 +302,8 @@ function NewJobCard({ onCreated }) {
     try {
       const body = {
         street: form.street.trim(),
-        bin_count: Number(form.bin_count) || 1,
+        bin_count: form.bin_types.length,
+        bin_types: form.bin_types,
       };
       if (form.phone.trim()) body.phone = form.phone.trim();
       if (form.email.trim()) body.email = form.email.trim();
@@ -341,11 +357,40 @@ function NewJobCard({ onCreated }) {
       <input style={field} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
       <input style={field} type="tel" inputMode="tel" placeholder="Phone number *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-      <select style={field} value={form.bin_count} onChange={(e) => setForm({ ...form, bin_count: e.target.value })}>
-        <option value={1}>1 bin</option>
-        <option value={2}>2 bins</option>
-        <option value={3}>3 bins</option>
-      </select>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+        {BIN_TYPE_OPTIONS.map((opt) => {
+          const on = form.bin_types.includes(opt.value);
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => setForm({
+                ...form,
+                // Never let the last bin be unticked — there'd be no job.
+                bin_types: on
+                  ? (form.bin_types.length > 1 ? form.bin_types.filter((v) => v !== opt.value) : form.bin_types)
+                  : [...BIN_TYPE_OPTIONS.map((o) => o.value)].filter(
+                      (v) => v === opt.value || form.bin_types.includes(v),
+                    ),
+              })}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                border: on ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
+                background: on ? 'var(--green-soft, #eef6ef)' : '#fff',
+                fontWeight: on ? 600 : 400,
+              }}
+            >
+              <span style={{
+                width: 14, height: 14, borderRadius: 4, background: opt.swatch,
+                border: '1px solid rgba(0,0,0,0.22)', flex: '0 0 auto',
+              }} aria-hidden="true"/>
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
       <input style={field} type="email" inputMode="email" placeholder="Email (for receipt &amp; photos)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
       <p style={{ margin: '-2px 0 8px', fontSize: 12, color: 'var(--ink-3, #6b6b6b)' }}>
         Phone or email — at least one. It&rsquo;s the only way to reach them if the card fails.
@@ -451,7 +496,15 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
   const isSkipped = stop.status === 'skipped';
   const heading = stop.status === 'heading_there';
   const binCount = stop.bin_count || 1;
-  const binsLabel = stop.bin_count ? `${stop.bin_count} bin${stop.bin_count > 1 ? 's' : ''}` : 'bins —';
+  // Name the bins when the booking told us, otherwise the bare count (plans
+  // booked before we started asking).
+  const binsLabel = stop.bin_count ? describeBins(stop.bin_types, stop.bin_count) : 'bins —';
+  // Photo steps are keyed by position, and bin_types is stored in canonical
+  // order, so index i is that bin. Falls back to "Bin 1/2/3" when unknown.
+  const binLabelAt = (i) => {
+    const t = Array.isArray(stop.bin_types) ? stop.bin_types[i] : null;
+    return t ? (BIN_SHORT[t] || t) : `Bin ${i + 1}`;
+  };
   const [discount, setDiscount] = useState('');
   const [payMethod, setPayMethod] = useState('card_on_file');
   const [amountOverride, setAmountOverride] = useState('');
@@ -499,7 +552,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
       setBinPhoto(missingAfter, 'after', {
         ...bins[missingAfter].after,
         phase: 'error',
-        message: binCount > 1 ? `Take Bin ${missingAfter + 1}'s after photo before tapping Done.` : 'Take a clean-bin photo before tapping Done.',
+        message: binCount > 1 ? `Take the ${binLabelAt(missingAfter).toLowerCase()}'s after photo before tapping Done.` : 'Take a clean-bin photo before tapping Done.',
       });
       return;
     }
@@ -603,7 +656,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
         <React.Fragment key={i}>
           <PhotoStep
             n={i * 2 + 1}
-            title={binCount > 1 ? `Bin ${i + 1} — Before photo` : 'Before photo'}
+            title={binCount > 1 ? `${binLabelAt(i)} — Before photo` : 'Before photo'}
             hint={
               i === 0
                 ? 'Snap the dirty bin when you arrive — this is what makes the wash animation.'
@@ -615,7 +668,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
           />
           <PhotoStep
             n={i * 2 + 2}
-            title={binCount > 1 ? `Bin ${i + 1} — After photo` : 'After photo'}
+            title={binCount > 1 ? `${binLabelAt(i)} — After photo` : 'After photo'}
             hint={i === 0 ? 'Snap the clean bin. Required to finish.' : 'Snap this bin clean. Required to finish.'}
             state={bin.after}
             onChange={(e) => onBinPhotoChange(i, 'after', e)}

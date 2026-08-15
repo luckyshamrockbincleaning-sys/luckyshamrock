@@ -130,7 +130,11 @@ function loadBookingStripeJs() {
 const Booking = ({ tweaks }) => {
   const [step, setStep] = useStateBk(1);
   const [service, setService] = useStateBk('monthly');
-  const [bins, setBins] = useStateBk(1);
+  // The customer picks WHICH bins; the count follows from that. Asking for a
+  // number alone meant a one-bin order arrived with no way to tell the black
+  // bin from the green one.
+  const [binTypes, setBinTypes] = useStateBk(['garbage']);
+  const bins = binTypes.length;
   const [selectedDay, setSelectedDay] = useStateBk(null);
   const [contact, setContact] = useStateBk({
     name: '',
@@ -189,6 +193,13 @@ const Booking = ({ tweaks }) => {
   // inline fallback only applies if that script fails to load.
   const P = (typeof window !== 'undefined' && window.LS_PRICING) ||
     { oneoff: 45, monthly: 35, seasonalSeason: 105, seasonalPerWash: 35, extraBinPerClean: 12 };
+
+  // Same single client source, same fallback rule (see bin-types-sync.test.ts).
+  const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
+    { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
+    { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
+    { value: 'recycling', label: 'Blue · recycling', swatch: '#1f6fb2' },
+  ];
 
   const services = [
     { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: P.oneoff },
@@ -381,6 +392,7 @@ const Booking = ({ tweaks }) => {
       // oneoff_date, but the API still requires a valid pickup_day.
       pickup_day: plan === 'oneoff' ? 'monday' : contact.pickupDay,
       bin_count: bins,
+      bin_types: binTypes,
       bin_location: contact.binLocation,
       plan,
       ...(plan === 'oneoff' && oneoffDate ? { oneoff_date: oneoffDate } : {}),
@@ -486,18 +498,34 @@ const Booking = ({ tweaks }) => {
                 </div>
 
                 <div className="field" style={{marginTop: 22}}>
-                  <label>How many garbage bins?</label>
-                  <div style={{display: 'flex', gap: 8}}>
-                    {[1,2,3].map(n => (
-                      <button
-                        key={n}
-                        onClick={() => setBins(n)}
-                        className={`service-option ${bins === n ? 'selected' : ''}`}
-                        style={{flex: 1, textAlign: 'center', padding: '14px 8px'}}
-                      >
-                        <div className="so-title" style={{margin: 0}}>{n}</div>
-                      </button>
-                    ))}
+                  <label>Which bins should we clean?</label>
+                  <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                    {BIN_TYPE_OPTIONS.map(opt => {
+                      const on = binTypes.includes(opt.value);
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => setBinTypes(
+                            on
+                              // Never let them deselect everything — there'd
+                              // be no job left to book.
+                              ? (binTypes.length > 1 ? binTypes.filter(v => v !== opt.value) : binTypes)
+                              // Rebuild from the canonical list so the order is
+                              // always the same one the server stores.
+                              : BIN_TYPE_OPTIONS
+                                  .map(o => o.value)
+                                  .filter(v => v === opt.value || binTypes.includes(v)),
+                          )}
+                          className={`service-option ${on ? 'selected' : ''}`}
+                          style={{display: 'flex', alignItems: 'center', gap: 10, padding: '13px 14px'}}
+                        >
+                          <span className="bin-swatch" style={{background: opt.swatch}} aria-hidden="true"/>
+                          <span className="so-title" style={{margin: 0}}>{opt.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

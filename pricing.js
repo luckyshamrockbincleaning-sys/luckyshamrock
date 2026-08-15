@@ -13,6 +13,18 @@ window.LS_PRICING = {
   extraBinPerClean: 12, // each additional bin, per clean
 };
 
+/* Which bins a customer can pick, in the SAME canonical order as
+   lib/bin-types.ts (BIN_TYPES). Order matters beyond looks: photos and the
+   per-bin email sections are keyed by position, so "bin 1" has to mean the
+   same bin every visit. lib/_tests/bin-types-sync.test.ts fails the build if
+   this drifts from the server list. Shared by the storefront booking form and
+   the /ops walk-up form. */
+window.LS_BIN_TYPES = [
+  { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
+  { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
+  { value: 'recycling', label: 'Blue · recycling', swatch: '#1f6fb2' },
+];
+
 // Business launch day — cleans can't be scheduled before this. The booking
 // calendar, schedule previews, and the site banner all read it; it becomes
 // inert once the date passes.

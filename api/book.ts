@@ -24,6 +24,7 @@ import { isStripeConfigured } from '../lib/stripe.js';
 import { formatFriendlyDate } from '../lib/dates.js';
 import { effectiveStartDate } from '../lib/launch.js';
 import { isInSeason, seasonEnd } from '../lib/season.js';
+import { normalizeBinTypes } from '../lib/bin-types.js';
 import { checkEmailDomain, undeliverableEmailMessage } from '../lib/email-domain.js';
 
 // How many future visits to generate per cadence at booking time.
@@ -170,6 +171,9 @@ export default async function handler(
     return;
   }
   const data = parsed.data;
+  // Validation already proved these agree with bin_count; normalize once so
+  // the stored order is canonical (bin 1 must mean the same bin every visit).
+  const binTypes = data.bin_types ? normalizeBinTypes(data.bin_types) : null;
 
   // Service-area check
   if (!isInServiceArea(data.postal_code)) {
@@ -317,6 +321,7 @@ export default async function handler(
       // One-offs have no subscription, so store bin count on the visit itself.
       // Recurring visits leave it null and derive from the subscription.
       binCount: data.plan === 'oneoff' ? data.bin_count : null,
+      binTypes: data.plan === 'oneoff' ? binTypes : null,
       scheduledFor,
     }));
     const firstVisitId = visitRows[0]?.id ?? null;
@@ -387,6 +392,7 @@ export default async function handler(
           customerId,
           cadence: cadence!,
           binCount: data.bin_count,
+          binTypes,
           startedOn: startDate,
         });
       }

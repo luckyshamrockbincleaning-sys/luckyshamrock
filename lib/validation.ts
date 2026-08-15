@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LAUNCH_DATE_ISO } from './launch.js';
+import { normalizeBinTypes } from './bin-types.js';
 
 const emailField = z
   .string()
@@ -55,6 +56,11 @@ export const bookRequestSchema = z
     postal_code: z.string().trim().min(1).max(10),
     pickup_day: pickupDay,
     bin_count: binCount,
+    // Which bins to clean. Optional so a caller predating the field still
+    // works, but when present it must agree with bin_count — bin_count is what
+    // gets priced, so a request claiming one bin and three types would be
+    // three bins cleaned for the price of one.
+    bin_types: z.array(z.string()).max(3).optional(),
     bin_location: z.enum(['curb', 'side', 'garage', 'back']).optional(),
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
@@ -71,6 +77,26 @@ export const bookRequestSchema = z
       path: ['oneoff_date'],
     },
   )
+  .superRefine((data, ctx) => {
+    if (data.bin_types !== undefined) {
+      const normalized = normalizeBinTypes(data.bin_types);
+      if (normalized === null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'bin_types must be one or more of: garbage, organics, recycling',
+          path: ['bin_types'],
+        });
+      } else if (normalized.length !== data.bin_count) {
+        // Also catches a duplicate selection ({garbage,garbage} normalizes to
+        // one entry) — you cannot clean the same bin twice.
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'bin_types must list exactly bin_count distinct bins',
+          path: ['bin_types'],
+        });
+      }
+    }
+  })
   .superRefine((data, ctx) => {
     if (data.plan !== 'oneoff' || !data.oneoff_date) return;
 

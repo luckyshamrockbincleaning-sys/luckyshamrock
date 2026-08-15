@@ -128,6 +128,7 @@ export interface OperatorVisitRow {
   postalCode: string | null;
   binLocation: string | null;
   binCount: number | null;
+  binTypes?: string[] | null;
   creditCents?: number | null;
 }
 
@@ -145,6 +146,9 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     postal_code: r.postalCode,
     bin_location: r.binLocation,
     bin_count: r.binCount,
+    // Which bins, when we know. Null on plans booked before we asked, so
+    // /ops falls back to the count.
+    bin_types: r.binTypes ?? null,
     // Shown as a badge on the stop card so the operator sees a reduced
     // charge coming BEFORE tapping Done, never as a surprise afterwards.
     credit_cents: r.creditCents ?? 0,

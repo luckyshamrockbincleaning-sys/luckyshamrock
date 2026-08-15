@@ -144,6 +144,10 @@ export const subscription = pgTable(
       .references(() => customer.id, { onDelete: 'restrict' }),
     cadence: cadenceEnum('cadence').notNull(),
     binCount: integer('bin_count').notNull(),
+    // Which bins, e.g. {garbage,organics}. NULL on plans booked before we
+    // asked — see lib/bin-types.ts. bin_count stays the source of truth for
+    // pricing and photo pairing; the CHECK below stops the two drifting.
+    binTypes: text('bin_types').array(),
     status: subscriptionStatusEnum('status').notNull().default('active'),
     startedOn: date('started_on', { mode: 'date' }).notNull(),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
@@ -158,6 +162,10 @@ export const subscription = pgTable(
       .on(t.customerId)
       .where(sql`status = 'active'`),
     binCountPositive: check('subscription_bin_count_positive', sql`${t.binCount} > 0`),
+    binTypesMatchCount: check(
+      'subscription_bin_types_match_count',
+      sql`${t.binTypes} is null or array_length(${t.binTypes}, 1) = ${t.binCount}`,
+    ),
   }),
 );
 
@@ -175,6 +183,9 @@ export const visit = pgTable(
     // Recurring visits leave this null and read bin_count off their subscription
     // (single source of truth per visit type). The operator view COALESCEs the two.
     binCount: integer('bin_count'),
+    // Set on one-off/walk-up visits, the same way bin_count is. Recurring
+    // visits leave it null and inherit the subscription's.
+    binTypes: text('bin_types').array(),
     scheduledFor: date('scheduled_for', { mode: 'date' }).notNull(),
     status: visitStatusEnum('status').notNull().default('scheduled'),
     headingThereAt: timestamp('heading_there_at', { withTimezone: true }),
@@ -203,6 +214,11 @@ export const visit = pgTable(
     binCountPositive: check(
       'visit_bin_count_positive',
       sql`${t.binCount} is null or ${t.binCount} > 0`,
+    ),
+    // A visit that names its bins must also state how many, and agree.
+    binTypesMatchCount: check(
+      'visit_bin_types_match_count',
+      sql`${t.binTypes} is null or (${t.binCount} is not null and array_length(${t.binTypes}, 1) = ${t.binCount})`,
     ),
   }),
 );

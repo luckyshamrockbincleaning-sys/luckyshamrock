@@ -49,6 +49,7 @@ import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import { isInSeason, seasonEnd } from './season.js';
+import { normalizeBinTypes, describeBins, BIN_TYPE_SHORT, type BinType } from './bin-types.js';
 import { generateVisitDates, type PickupDay } from './schedule.js';
 import QRCode from 'qrcode';
 
@@ -94,6 +95,9 @@ const newJobSchema = z
     phone: z.string().trim().min(1).max(40).optional(),
     postal_code: z.string().trim().max(10).optional(),
     bin_count: z.number().int().min(1).max(3).default(1),
+    // Which bins. Optional for older callers; when present it must agree
+    // with bin_count, which is what gets priced.
+    bin_types: z.array(z.string()).max(3).optional(),
     email: z.string().trim().toLowerCase().email().optional(),
     name: z.string().trim().min(1).max(120).optional(),
     city: z.string().trim().min(1).max(120).optional(),
@@ -168,6 +172,7 @@ const stopColumns = {
   // One-offs store bin_count on the visit; recurring derive it from the
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
+  binTypes: sql<string[] | null>`coalesce(${visit.binTypes}, ${subscription.binTypes})`,
   creditCents: customer.creditCents,
 } as const;
 
@@ -392,6 +397,16 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
     return;
   }
   const data = parsed.data;
+  // Which bins, canonicalised so bin 1 always means the same bin. Must agree
+  // with bin_count, which is what gets priced.
+  const walkupBinTypes = data.bin_types ? normalizeBinTypes(data.bin_types) : null;
+  if (data.bin_types && (walkupBinTypes === null || walkupBinTypes.length !== data.bin_count)) {
+    res.status(400).json({
+      status: 'invalid',
+      errors: { bin_types: ['Pick which bins to clean — one entry per bin, no repeats.'] },
+    });
+    return;
+  }
   // Default to today — the overwhelmingly common walk-up case (operator is
   // at the bin right now); an explicit date is the "come back in two weeks" deal.
   const scheduledForISO = data.scheduled_for ?? operatorTodayISO();
@@ -444,6 +459,7 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
         customerId,
         subscriptionId: null,
         binCount: data.bin_count,
+        binTypes: walkupBinTypes,
         scheduledFor: new Date(`${scheduledForISO}T12:00:00Z`),
         status: 'scheduled',
       });
@@ -906,6 +922,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         scheduledFor: visit.scheduledFor,
         paymentStatus: visit.paymentStatus,
         visitBinCount: visit.binCount,
+        visitBinTypes: visit.binTypes,
         subId: visit.subscriptionId,
         customerId: visit.customerId,
         headingThereAt: visit.headingThereAt,
@@ -977,10 +994,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
     // Cadence + bin count are needed by both billing and the PDF receipt.
     let cadence: Cadence | null = null;
     let binCount = row.visitBinCount ?? 1;
+    // Which bins, for naming the photo sections in the customer's email.
+    // Same one-off-vs-subscription rule as the count.
+    let binTypes: string[] | null = row.visitBinTypes ?? null;
     if (row.subId) {
       const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
       cadence = (sub?.cadence as Cadence) ?? null;
       binCount = sub?.binCount ?? binCount;
+      binTypes = sub?.binTypes ?? binTypes;
     }
     const baseCents = baseChargeCents(cadence, binCount);
     // The operator's amount override (if entered in /ops) replaces the
@@ -1291,7 +1312,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         }
         photoAttachments.push({ ...pair.after, inline: true, contentId: binAfterPhotoCid(n) });
       }
-      return { hasBefore: !!pair.before, hasAfter: !!pair.after };
+      // Name it when the booking told us which bins; otherwise "Bin 2".
+      const label = binTypes && binTypes[n - 1] ? BIN_TYPE_SHORT[binTypes[n - 1] as BinType] ?? null : null;
+      return { hasBefore: !!pair.before, hasAfter: !!pair.after, label };
     });
     // PDF receipt whenever money changed hands (or was explicitly comped) on
     // THIS tap. Regular attachment (paperclip), not inline. Best-effort. QR is
