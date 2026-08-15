@@ -8,8 +8,8 @@ import {
 } from '../bin-types.js';
 
 describe('bin type vocabulary', () => {
-  it('is the three bins a Fort Saskatchewan household has', () => {
-    expect(BIN_TYPES).toEqual(['garbage', 'organics', 'recycling']);
+  it('is the bins we actually service — blue/recycling is not one of them', () => {
+    expect(BIN_TYPES).toEqual(['garbage', 'organics']);
   });
 
   it('labels every type for both the form and the route card', () => {
@@ -28,14 +28,9 @@ describe('normalizeBinTypes', () => {
 
   it('sorts into canonical order so bin 1 is always the same bin', () => {
     // Photos and email sections are keyed by position. If the client sent
-    // ['recycling','garbage'] the "before/after bin 1" pair would silently
+    // ['organics','garbage'] the "before/after bin 1" pair would silently
     // mean a different bin than it did last visit.
-    expect(normalizeBinTypes(['recycling', 'garbage'])).toEqual(['garbage', 'recycling']);
-    expect(normalizeBinTypes(['organics', 'recycling', 'garbage'])).toEqual([
-      'garbage',
-      'organics',
-      'recycling',
-    ]);
+    expect(normalizeBinTypes(['organics', 'garbage'])).toEqual(['garbage', 'organics']);
   });
 
   it('drops duplicates', () => {
@@ -45,6 +40,10 @@ describe('normalizeBinTypes', () => {
   it('rejects unknown values rather than guessing', () => {
     expect(normalizeBinTypes(['garbage', 'yard-waste'])).toBeNull();
     expect(normalizeBinTypes(['black'])).toBeNull();
+    // We don't clean blue bins; a stale client sending one must be refused,
+    // not silently dropped down to a smaller (cheaper) job.
+    expect(normalizeBinTypes(['recycling'])).toBeNull();
+    expect(normalizeBinTypes(['garbage', 'recycling'])).toBeNull();
   });
 
   it('rejects an empty selection — every job cleans at least one bin', () => {
@@ -67,9 +66,6 @@ describe('describeBins', () => {
   it('names the bins when we know them', () => {
     expect(describeBins(['garbage'], 1)).toBe('Black bin');
     expect(describeBins(['garbage', 'organics'], 2)).toBe('Black bin + Green bin');
-    expect(describeBins(['garbage', 'organics', 'recycling'], 3)).toBe(
-      'Black bin + Green bin + Blue bin',
-    );
   });
 
   it('falls back to the count for bookings taken before we asked', () => {

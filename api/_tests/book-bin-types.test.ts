@@ -71,12 +71,12 @@ describe('POST /api/book — which bins', () => {
     // Photos and the per-bin email sections are keyed by position.
     const res = mockRes();
     await handler(
-      req({ ...base, plan: 'monthly', bin_count: 3, bin_types: ['recycling', 'organics', 'garbage'] }),
+      req({ ...base, plan: 'monthly', bin_count: 2, bin_types: ['organics', 'garbage'] }),
       res,
     );
     expect(res.statusCode).toBe(200);
     const [sub] = await getDb().select().from(subscription);
-    expect(sub!.binTypes).toEqual(['garbage', 'organics', 'recycling']);
+    expect(sub!.binTypes).toEqual(['garbage', 'organics']);
   });
 
   it('still accepts a booking with no bin_types at all (older clients)', async () => {
@@ -88,12 +88,12 @@ describe('POST /api/book — which bins', () => {
     expect(sub!.binTypes).toBeNull();
   });
 
-  it('refuses three bins priced as one', async () => {
-    // bin_count is what gets charged, so a mismatch is a way to get two bins
+  it('refuses two bins priced as one', async () => {
+    // bin_count is what gets charged, so a mismatch is a way to get a bin
     // cleaned for free. Reject rather than silently trusting either number.
     const res = mockRes();
     await handler(
-      req({ ...base, plan: 'monthly', bin_count: 1, bin_types: ['garbage', 'organics', 'recycling'] }),
+      req({ ...base, plan: 'monthly', bin_count: 1, bin_types: ['garbage', 'organics'] }),
       res,
     );
     expect(res.statusCode).toBe(400);
@@ -115,7 +115,7 @@ describe('POST /api/book — which bins', () => {
   it('refuses a bin type we do not service', async () => {
     const res = mockRes();
     await handler(
-      req({ ...base, plan: 'monthly', bin_count: 1, bin_types: ['yard-waste'] }),
+      req({ ...base, plan: 'monthly', bin_count: 1, bin_types: ['recycling'] }),
       res,
     );
     expect(res.statusCode).toBe(400);

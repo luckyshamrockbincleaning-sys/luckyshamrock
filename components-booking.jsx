@@ -198,7 +198,6 @@ const Booking = ({ tweaks }) => {
   const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
     { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
     { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
-    { value: 'recycling', label: 'Blue · recycling', swatch: '#1f6fb2' },
   ];
 
   const services = [

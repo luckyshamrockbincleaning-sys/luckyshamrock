@@ -9,9 +9,8 @@ const { useState, useEffect, useCallback, useRef } = React;
 const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
   { value: 'garbage', label: 'Black \u00b7 garbage', swatch: '#3a3a3c' },
   { value: 'organics', label: 'Green \u00b7 organics', swatch: '#2f7d32' },
-  { value: 'recycling', label: 'Blue \u00b7 recycling', swatch: '#1f6fb2' },
 ];
-const BIN_SHORT = { garbage: 'Black bin', organics: 'Green bin', recycling: 'Blue bin' };
+const BIN_SHORT = { garbage: 'Black bin', organics: 'Green bin' };
 // Mirrors describeBins() in lib/bin-types.ts: name the bins when we know
 // them, fall back to the count for jobs booked before we asked.
 function describeBins(types, count) {

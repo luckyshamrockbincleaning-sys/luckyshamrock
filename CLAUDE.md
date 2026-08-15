@@ -330,7 +330,9 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   Interpolating it directly renders "Fort Saskatchewan null" into Maps links and
   receipts.
 - **A booking says WHICH bins, not just how many.** `lib/bin-types.ts` is the
-  vocabulary (`garbage`/`organics`/`recycling`); `bin_types text[]` sits beside
+  vocabulary — **`garbage` and `organics` only; we don't service blue
+  recycling bins**, and a request naming one is rejected rather than quietly
+  downgraded to a smaller job. `bin_types text[]` sits beside
   `bin_count` on both `subscription` and `visit` (migration 0015). Rules:
   - **`bin_count` stays the source of truth for money and photo pairing.**
     `bin_types` is the descriptive companion, and CHECK constraints

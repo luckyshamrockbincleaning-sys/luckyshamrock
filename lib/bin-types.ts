@@ -15,7 +15,10 @@
  * email templates.
  */
 
-export const BIN_TYPES = ['garbage', 'organics', 'recycling'] as const;
+// Recycling is deliberately absent: Lucky Shamrock doesn't service blue
+// bins. Re-adding one is a three-line change here plus the same entry in
+// pricing.js — the sync test will tell you if you only do one of them.
+export const BIN_TYPES = ['garbage', 'organics'] as const;
 
 export type BinType = (typeof BIN_TYPES)[number];
 
@@ -23,14 +26,12 @@ export type BinType = (typeof BIN_TYPES)[number];
 export const BIN_TYPE_LABEL: Record<BinType, string> = {
   garbage: 'Black · garbage',
   organics: 'Green · organics',
-  recycling: 'Blue · recycling',
 };
 
 /** Short form, for route cards, receipts and email section headings. */
 export const BIN_TYPE_SHORT: Record<BinType, string> = {
   garbage: 'Black bin',
   organics: 'Green bin',
-  recycling: 'Blue bin',
 };
 
 const ORDER = new Map<BinType, number>(BIN_TYPES.map((t, i) => [t, i]));

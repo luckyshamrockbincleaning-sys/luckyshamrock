@@ -49,7 +49,7 @@ import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import { isInSeason, seasonEnd } from './season.js';
-import { normalizeBinTypes, describeBins, BIN_TYPE_SHORT, type BinType } from './bin-types.js';
+import { normalizeBinTypes, describeBins, BIN_TYPES, BIN_TYPE_SHORT, type BinType } from './bin-types.js';
 import { generateVisitDates, type PickupDay } from './schedule.js';
 import QRCode from 'qrcode';
 
@@ -97,7 +97,7 @@ const newJobSchema = z
     bin_count: z.number().int().min(1).max(3).default(1),
     // Which bins. Optional for older callers; when present it must agree
     // with bin_count, which is what gets priced.
-    bin_types: z.array(z.string()).max(3).optional(),
+    bin_types: z.array(z.string()).max(BIN_TYPES.length).optional(),
     email: z.string().trim().toLowerCase().email().optional(),
     name: z.string().trim().min(1).max(120).optional(),
     city: z.string().trim().min(1).max(120).optional(),

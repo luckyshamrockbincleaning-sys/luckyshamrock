@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { LAUNCH_DATE_ISO } from './launch.js';
-import { normalizeBinTypes } from './bin-types.js';
+import { normalizeBinTypes, BIN_TYPES } from './bin-types.js';
 
 const emailField = z
   .string()
@@ -58,9 +58,10 @@ export const bookRequestSchema = z
     bin_count: binCount,
     // Which bins to clean. Optional so a caller predating the field still
     // works, but when present it must agree with bin_count — bin_count is what
-    // gets priced, so a request claiming one bin and three types would be
-    // three bins cleaned for the price of one.
-    bin_types: z.array(z.string()).max(3).optional(),
+    // gets priced, so a request claiming one bin and two types would be two
+    // bins cleaned for the price of one. Bound follows the vocabulary, so
+    // adding or removing a bin type can't leave a stale number here.
+    bin_types: z.array(z.string()).max(BIN_TYPES.length).optional(),
     bin_location: z.enum(['curb', 'side', 'garage', 'back']).optional(),
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
@@ -83,7 +84,7 @@ export const bookRequestSchema = z
       if (normalized === null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'bin_types must be one or more of: garbage, organics, recycling',
+          message: 'bin_types must be one or more of: garbage, organics',
           path: ['bin_types'],
         });
       } else if (normalized.length !== data.bin_count) {
