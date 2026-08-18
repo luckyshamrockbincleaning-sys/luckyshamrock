@@ -315,19 +315,40 @@ export async function handleToday(req: VercelRequest, res: VercelResponse): Prom
   }
   try {
     const q = req.query.date;
-    const targetISO = typeof q === 'string' && DATE_RE.test(q) ? q : operatorTodayISO();
+    const explicitDate = typeof q === 'string' && DATE_RE.test(q);
+    const targetISO = explicitDate ? q : operatorTodayISO();
     const targetDate = new Date(`${targetISO}T00:00:00Z`);
 
     const db = getDb();
+    // Unfinished work from earlier days rolls forward onto today's route.
+    //
+    // Without this a visit that isn't completed on its scheduled day matches
+    // NO tab at all: `today` wants an exact date, `upcoming` is forward-only,
+    // and history/attention only cover visits already done, skipped or
+    // cancelled. A customer who booked at 5pm for a same-day clean vanished
+    // overnight, and four other jobs had been invisible for up to eleven days.
+    //
+    // `?date=` is exempt: that view is for looking at one specific day, and
+    // sweeping every unfinished job into it would make it useless for planning.
+    const datePredicate = explicitDate
+      ? eq(visit.scheduledFor, targetDate)
+      : lte(visit.scheduledFor, targetDate);
+
     const rows = await db
       .select(stopColumns)
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
       .leftJoin(subscription, eq(visit.subscriptionId, subscription.id))
-      .where(and(eq(visit.scheduledFor, targetDate), inArray(visit.status, ACTIONABLE_VISIT_STATUSES)))
-      .orderBy(asc(customer.name));
+      .where(and(datePredicate, inArray(visit.status, ACTIONABLE_VISIT_STATUSES)))
+      // Oldest first, so the longest-overdue job is the first thing seen
+      // rather than something that rots at the bottom of the list.
+      .orderBy(asc(visit.scheduledFor), asc(customer.name));
 
-    res.status(200).json({ status: 'ok', date: targetISO, visits: rows.map(toOperatorVisit) });
+    const visits = rows.map((r) => {
+      const dto = toOperatorVisit(r);
+      return { ...dto, overdue: dto.scheduled_for < targetISO };
+    });
+    res.status(200).json({ status: 'ok', date: targetISO, visits });
   } catch (err) {
     console.error('[operator/today] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });

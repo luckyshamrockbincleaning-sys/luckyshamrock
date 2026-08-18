@@ -123,3 +123,85 @@ describe('GET /api/operator/today', () => {
     expect(res.body.visits[0].customer_name).toBe('July');
   });
 });
+
+describe('GET /api/operator/today — overdue work rolls forward', () => {
+  // Mia Kang booked at 5pm for a same-day clean on 2026-08-17. It was missed.
+  // The next morning her visit matched no tab at all: `today` wants an exact
+  // date, `upcoming` only looks forward, and `history`/`attention` only cover
+  // visits that are already done/skipped/cancelled. Four other jobs had been
+  // sitting invisible for as long as eleven days.
+  function edmontonTodayISO(): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Edmonton', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+  }
+  function isoPlusDays(iso: string, days: number): string {
+    const d = new Date(`${iso}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  it('shows an unfinished visit from a previous day, flagged overdue', async () => {
+    const today = edmontonTodayISO();
+    await seedVisit({ date: isoPlusDays(today, -1), name: 'Mia' });
+    await seedVisit({ date: today, name: 'TodayStop' });
+
+    const res = mockRes();
+    await handler(await req(true), res);
+
+    expect(res.statusCode).toBe(200);
+    const names = res.body.visits.map((v: any) => v.customer_name);
+    expect(names).toContain('Mia');
+    expect(names).toContain('TodayStop');
+    const mia = res.body.visits.find((v: any) => v.customer_name === 'Mia');
+    expect(mia.overdue).toBe(true);
+    const todayStop = res.body.visits.find((v: any) => v.customer_name === 'TodayStop');
+    expect(todayStop.overdue).toBe(false);
+  });
+
+  it('puts the oldest overdue work first, so nothing rots at the bottom', async () => {
+    const today = edmontonTodayISO();
+    await seedVisit({ date: today, name: 'TodayStop' });
+    await seedVisit({ date: isoPlusDays(today, -1), name: 'Yesterday' });
+    await seedVisit({ date: isoPlusDays(today, -10), name: 'TenDaysAgo' });
+
+    const res = mockRes();
+    await handler(await req(true), res);
+    expect(res.body.visits.map((v: any) => v.customer_name)).toEqual([
+      'TenDaysAgo',
+      'Yesterday',
+      'TodayStop',
+    ]);
+  });
+
+  it('leaves finished work alone — only actionable visits roll forward', async () => {
+    const today = edmontonTodayISO();
+    await seedVisit({ date: isoPlusDays(today, -2), status: 'done', name: 'AlreadyDone' });
+    await seedVisit({ date: isoPlusDays(today, -2), status: 'skipped', name: 'Skipped' });
+    await seedVisit({ date: isoPlusDays(today, -2), status: 'cancelled', name: 'Cancelled' });
+
+    const res = mockRes();
+    await handler(await req(true), res);
+    expect(res.body.visits).toHaveLength(0);
+  });
+
+  it('does NOT roll overdue work into an explicitly requested day', async () => {
+    // ?date= is for looking at one specific day. Sweeping every unfinished job
+    // into it would make that view useless for planning.
+    const today = edmontonTodayISO();
+    await seedVisit({ date: isoPlusDays(today, -1), name: 'Mia' });
+    await seedVisit({ date: today, name: 'TodayStop' });
+
+    const res = mockRes();
+    await handler(await req(true, { date: today }), res);
+    expect(res.body.visits.map((v: any) => v.customer_name)).toEqual(['TodayStop']);
+  });
+
+  it('still reports the anchor date it was asked about', async () => {
+    const today = edmontonTodayISO();
+    await seedVisit({ date: isoPlusDays(today, -1), name: 'Mia' });
+    const res = mockRes();
+    await handler(await req(true), res);
+    expect(res.body.date).toBe(today);
+  });
+});

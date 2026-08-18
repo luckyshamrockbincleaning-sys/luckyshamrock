@@ -183,6 +183,15 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   failed; `{op:'retry'}` re-charges one (fresh idempotency key per attempt).
 - **"Today" is Edmonton-local** via `operatorTodayISO()` (route runs in Mountain
   Time; UTC "today" flips mid-evening). `today`/`upcoming` accept `?date=YYYY-MM-DD`.
+- **🔴 Unfinished work ROLLS FORWARD onto today's route** (`scheduled_for <=`
+  today for actionable statuses), flagged `overdue: true` per visit and sorted
+  oldest-first. This is load-bearing: `today` is an exact date match,
+  `upcoming` is strictly forward, and `history`/`attention` only cover
+  done/skipped/cancelled — so before this, **a visit not completed on its
+  scheduled day matched NO tab and became permanently invisible.** Five real
+  jobs were lost that way, one for eleven days. **An explicit `?date=` keeps
+  the exact match** (that view is for planning one specific day). If you add a
+  visit list, ask what happens to it the morning after.
   `upcoming` returns all future actionable visits after the anchor date, not a
   7-day window.
 - **Active route lists are actionable only.** `today`/`upcoming` return only

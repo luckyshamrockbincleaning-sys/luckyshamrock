@@ -621,10 +621,18 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
   }
 
   return (
-    <div className="ops-card">
+    <div className="ops-card" style={stop.overdue ? { borderLeft: '4px solid #8a1f1f' } : undefined}>
       <div className="ops-card-head">
         <div>
-          {showDate && <div className="ops-date">{formatDate(stop.scheduled_for)}</div>}
+          {stop.overdue ? (
+            // Loud on purpose: this job was missed on its day and would
+            // otherwise have disappeared entirely.
+            <div className="ops-date" style={{ color: '#8a1f1f', fontWeight: 700 }}>
+              ⚠ OVERDUE — was {formatDate(stop.scheduled_for)}
+            </div>
+          ) : (
+            showDate && <div className="ops-date">{formatDate(stop.scheduled_for)}</div>
+          )}
           <div className="ops-name">{stop.customer_name}</div>
           <div className="ops-addr">{addressOf(stop)}</div>
         </div>
@@ -1240,6 +1248,23 @@ function OpsApp() {
       )}
 
       <QrPanel qr={qr} onDismiss={() => setQr(null)} />
+
+      {/* Overdue jobs sort to the top, but say the count out loud too — these
+          were invisible for up to eleven days and must not be scrolled past. */}
+      {view === 'today' && data.view === view && !data.loading && (() => {
+        const n = data.stops.filter((s) => s.overdue).length;
+        if (n === 0) return null;
+        return (
+          <div className="ops-card" style={{ borderLeft: '4px solid #8a1f1f', marginBottom: 12 }}>
+            <p style={{ margin: 0, color: '#8a1f1f', fontWeight: 700 }}>
+              ⚠ {n} job{n > 1 ? 's' : ''} still owed from an earlier day
+            </p>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
+              Listed first below. Finish it, or tap Skip if it isn&rsquo;t happening.
+            </p>
+          </div>
+        );
+      })()}
 
       {data.loading || data.view !== view ? (
         <div className="ops-card"><p>Loading…</p></div>
