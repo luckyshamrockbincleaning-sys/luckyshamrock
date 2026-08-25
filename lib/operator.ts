@@ -129,6 +129,7 @@ export interface OperatorVisitRow {
   binLocation: string | null;
   binCount: number | null;
   binTypes?: string[] | null;
+  hasCard?: boolean | null;
   creditCents?: number | null;
 }
 
@@ -149,6 +150,10 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     // Which bins, when we know. Null on plans booked before we asked, so
     // /ops falls back to the count.
     bin_types: r.binTypes ?? null,
+    // Whether there's a saved card. The Done screen needs this: defaulting to
+    // "Card on file" for a walk-up who has none completes the job and records
+    // nothing at all (it happened twice before this was exposed).
+    has_card: Boolean(r.hasCard),
     // Shown as a badge on the stop card so the operator sees a reduced
     // charge coming BEFORE tapping Done, never as a surprise afterwards.
     credit_cents: r.creditCents ?? 0,

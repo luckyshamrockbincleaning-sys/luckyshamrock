@@ -505,7 +505,11 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     return t ? (BIN_SHORT[t] || t) : `Bin ${i + 1}`;
   };
   const [discount, setDiscount] = useState('');
-  const [payMethod, setPayMethod] = useState('card_on_file');
+  // Only preselect "Card on file" when there IS one. A walk-up with no
+  // saved card who is Done'd on the default records NO payment at all —
+  // that silently lost two real jobs before this. No card => no default,
+  // and Done stays disabled until a method is picked.
+  const [payMethod, setPayMethod] = useState(stop.has_card ? 'card_on_file' : '');
   const [amountOverride, setAmountOverride] = useState('');
   // On-the-spot extra for a bin in a genuinely bad state. The reason is
   // mandatory because it prints on the customer's receipt.
@@ -696,21 +700,35 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
               ['terminal', '🔖 Tap in Stripe'],
               ['cash', '💵 Cash'],
               ['etransfer', '🏦 E-transfer'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                disabled={busy}
-                onClick={() => setPayMethod(value)}
-                style={{
-                  padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
-                  border: payMethod === value ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
-                  background: payMethod === value ? 'var(--green-soft, #eef6ef)' : '#fff',
-                  fontWeight: payMethod === value ? 600 : 400,
-                }}
-              >{label}</button>
-            ))}
+            ].map(([value, label]) => {
+              // "Card on file" is not a real option for someone who hasn't
+              // saved one — offering it is how a job gets completed with
+              // nothing recorded.
+              const unavailable = value === 'card_on_file' && !stop.has_card;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={busy || unavailable}
+                  title={unavailable ? 'No card on file for this customer' : undefined}
+                  onClick={() => setPayMethod(value)}
+                  style={{
+                    padding: '7px 10px', borderRadius: 8, fontSize: 13,
+                    cursor: unavailable ? 'not-allowed' : 'pointer',
+                    opacity: unavailable ? 0.4 : 1,
+                    border: payMethod === value ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
+                    background: payMethod === value ? 'var(--green-soft, #eef6ef)' : '#fff',
+                    fontWeight: payMethod === value ? 600 : 400,
+                  }}
+                >{label}</button>
+              );
+            })}
           </div>
+          {!stop.has_card && !payMethod && (
+            <p style={{ margin: '8px 0 0', fontSize: 13, color: '#8a1f1f', fontWeight: 600 }}>
+              No card on file — pick how they&rsquo;re paying before you tap Done.
+            </p>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
             <label style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>Amount&nbsp;$</label>
             <input
@@ -790,7 +808,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || submitting || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
+            disabled={busy || submitting || !payMethod || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
             onClick={doneWithDiscount}
             style={submitting ? { opacity: 0.85 } : undefined}
           >
@@ -928,16 +946,40 @@ function AttentionCard({ item, onAction, busy }) {
         {item.customer.phone && <a className="ops-phone" href={`tel:${item.customer.phone}`}>{item.customer.phone}</a>}
       </div>
       {item.failure_reason && <div className="ops-notes">{item.failure_reason}</div>}
-      <div className="ops-actions">
-        {canRetry ? (
+      <div className="ops-actions" style={{ flexWrap: 'wrap', gap: 6 }}>
+        {canRetry && (
           <button className="btn btn-primary ops-btn" disabled={busy} onClick={() => onAction('retry', item)}>
             Retry charge
           </button>
-        ) : (
-          <div style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
-            {item.payment_status === 'awaiting_payment' ? 'Waiting on the customer to scan.' : 'Collect at the door.'}
+        )}
+        {item.payment_status === 'awaiting_payment' && (
+          <div style={{ fontSize: 13, color: 'var(--ink-3, #6b6b6b)', width: '100%' }}>
+            Waiting on the customer to scan — or record it below if they paid another way.
           </div>
         )}
+      </div>
+      {/* Record money that already arrived. Without this a job completed on the
+          wrong payment method sat here with no action at all, and only a
+          developer with database access could fix it. */}
+      <div style={{ marginTop: 10, borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: 10 }}>
+        <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-3, #6b6b6b)', marginBottom: 6 }}>
+          Already paid? Record it:
+        </label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {[['cash', '💵 Cash'], ['etransfer', '🏦 E-transfer'], ['terminal', '🔖 Tapped in Stripe']].map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              className="btn btn-ghost ops-btn"
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Record ${amt} received by ${label.replace(/^\S+\s/, '')} for ${item.customer?.name || 'this customer'}?`)) {
+                  onAction('settle', item, { method: m });
+                }
+              }}
+            >{label}</button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1076,6 +1118,12 @@ function OpsApp() {
       if (action === 'done' && opts.discount_cents > 0) {
         body.discount_cents = opts.discount_cents;
       }
+      // Same explicit-allow-list rule as the photos below: forget this and the
+      // settle silently posts with no method and 400s.
+      if (action === 'settle') {
+        body.method = opts.method;
+        if (opts.amount_cents != null) body.amount_cents = opts.amount_cents;
+      }
       // This field must be forwarded explicitly — it's the exact allow-list
       // that silently dropped before_photo in the past (2026-07-25 P0: the
       // before photo never left the browser because it wasn't in this list).
@@ -1107,6 +1155,12 @@ function OpsApp() {
 
       if (action === 'notify') {
         setFlash({ kind: 'ok', text: j.skipped ? `${stop.customer_name} was already notified.` : `Notified ${stop.customer_name}.` });
+      } else if (action === 'settle') {
+        const amt = typeof j.amount_cents === 'number' ? `$${(j.amount_cents / 100).toFixed(2)}` : '';
+        // Attention items nest the customer; stop cards flatten it. Tolerate
+        // both — a shape mismatch between the two is what blanked /ops on Aug 12.
+        const who = stop.customer_name || (stop.customer && stop.customer.name) || 'this customer';
+        setFlash({ kind: 'ok', text: `Recorded ${amt} from ${who} — books are square.` });
       } else if (action === 'done') {
         // Surface the charge outcome alongside the "done" confirmation.
         let chargeNote = '';

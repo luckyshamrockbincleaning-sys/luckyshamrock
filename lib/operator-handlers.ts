@@ -64,7 +64,7 @@ const CLEAN_PHOTO_MIME_TO_EXT: Record<string, string> = {
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
 const actSchema = z
-  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note', 'retry']) })
+  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note', 'retry', 'settle']) })
   .passthrough(); // keep `text` through for the note op
 const cleanPhotoSchema = z.object({
   filename: z.string().trim().min(1).max(160).optional(),
@@ -173,6 +173,7 @@ const stopColumns = {
   // subscription. COALESCE picks whichever is present.
   binCount: sql<number | null>`coalesce(${visit.binCount}, ${subscription.binCount})`,
   binTypes: sql<string[] | null>`coalesce(${visit.binTypes}, ${subscription.binTypes})`,
+  hasCard: sql<boolean>`${customer.defaultPaymentMethodId} is not null`,
   creditCents: customer.creditCents,
 } as const;
 
@@ -1730,12 +1731,135 @@ export async function handleRetry(req: VercelRequest, res: VercelResponse): Prom
 // id + op in the BODY ({id, op, text?}) instead of the URL. It validates, then
 // delegates to the existing per-op handlers, which read the id off req.query.id.
 // ─────────────────────────────────────────────────────────────────────
+/**
+ * Record money that was taken for a visit already marked done.
+ *
+ * The gap this fills: Done defaults to `card_on_file`, so a walk-up with no
+ * saved card could be completed with no payment row at all — and the Needs
+ * attention tab then offered NO action for that state (Retry only applies to a
+ * declined card). Twice the only way to correct it was a developer editing the
+ * database by hand.
+ *
+ * Deliberately limited to methods that mean "money already changed hands".
+ * `card_on_file` and `qr` are live payment flows, not bookkeeping, and belong
+ * to Done and the webhook respectively.
+ */
+const SETTLE_METHODS = ['cash', 'terminal', 'etransfer'] as const;
+// States where no money has actually been recorded yet. `failed` belongs
+// here: the card was declined and the customer paid another way instead.
+const SETTLEABLE_PAYMENT_STATUSES: Array<'unpaid' | 'failed' | 'awaiting_payment'> = ['unpaid', 'failed', 'awaiting_payment'];
+const settleSchema = z.object({
+  method: z.enum(SETTLE_METHODS),
+  amount_cents: z.number().int().min(0).max(100_000).optional(),
+});
+
+export async function handleSettle(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = settleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      status: 'invalid',
+      message: `method must be one of: ${SETTLE_METHODS.join(', ')}`,
+      errors: parsed.error.flatten().fieldErrors,
+    });
+    return;
+  }
+  const visitId = String(req.query.id ?? '');
+  const method = parsed.data.method;
+
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        status: visit.status,
+        paymentStatus: visit.paymentStatus,
+        customerId: visit.customerId,
+        visitBinCount: visit.binCount,
+        subId: visit.subscriptionId,
+      })
+      .from(visit)
+      .where(eq(visit.id, visitId));
+
+    if (!row) {
+      res.status(404).json({ status: 'not_found' });
+      return;
+    }
+    if (row.status !== 'done') {
+      res.status(409).json({
+        status: 'not_done',
+        message: `This visit is ${row.status}. Settling records money already taken for a finished clean.`,
+      });
+      return;
+    }
+    // Only states where nothing has actually been collected. `failed` counts:
+    // the card was declined and the customer paid another way instead.
+    if (!SETTLEABLE_PAYMENT_STATUSES.includes(row.paymentStatus as 'unpaid' | 'failed' | 'awaiting_payment')) {
+      res.status(409).json({
+        status: 'already_settled',
+        message: `This visit is already recorded as ${row.paymentStatus}.`,
+      });
+      return;
+    }
+
+    // Standard price unless the operator overrides it (a doorstep deal).
+    let amount = parsed.data.amount_cents ?? null;
+    if (amount === null) {
+      let cadence: Cadence | null = null;
+      let binCount = row.visitBinCount ?? 1;
+      if (row.subId) {
+        const [sub] = await db.select().from(subscription).where(eq(subscription.id, row.subId));
+        cadence = (sub?.cadence as Cadence) ?? null;
+        binCount = sub?.binCount ?? binCount;
+      }
+      amount = finalChargeCents(baseChargeCents(cadence, binCount), 0);
+    }
+
+    const status = method === 'cash' ? 'paid_cash' : method === 'etransfer' ? 'paid_etransfer' : 'paid_terminal';
+    // Claim the visit the same way Done does, so two taps can't both insert.
+    // The WHERE re-checks the payment status, so the loser writes nothing.
+    const claimed = await db
+      .update(visit)
+      .set({ paymentStatus: status })
+      .where(and(eq(visit.id, visitId), inArray(visit.paymentStatus, SETTLEABLE_PAYMENT_STATUSES)))
+      .returning({ id: visit.id });
+    if (claimed.length === 0) {
+      res.status(409).json({ status: 'already_settled', message: 'Someone just settled this visit.' });
+      return;
+    }
+
+    await db.insert(payment).values({
+      id: crypto.randomUUID(),
+      customerId: row.customerId,
+      visitId,
+      amountCents: amount,
+      discountCents: 0,
+      creditCents: 0,
+      surchargeCents: 0,
+      status: 'succeeded',
+      method,
+    });
+
+    res.status(200).json({ status: 'ok', payment_status: status, amount_cents: amount, method });
+  } catch (err) {
+    console.error('[operator/settle] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
 const ACT_HANDLERS: Record<string, (req: VercelRequest, res: VercelResponse) => Promise<void>> = {
   notify: handleNotify,
   done: handleDone,
   skip: handleSkip,
   note: handleNote,
   retry: handleRetry,
+  settle: handleSettle,
 };
 
 export async function handleAct(req: VercelRequest, res: VercelResponse): Promise<void> {

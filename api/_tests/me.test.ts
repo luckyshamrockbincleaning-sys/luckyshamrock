@@ -7,6 +7,36 @@ import { customer, subscription, visit, payment } from '../../db/schema.js';
 import { signSessionCookie, SESSION_COOKIE_NAME } from '../../lib/cookies.js';
 import { eq } from 'drizzle-orm';
 
+// Dates here must be relative to the real clock, not hardcoded. Two tests in
+// this file silently rotted when the calendar passed 2026-08-20: a "future"
+// visit became a past one and the assertions started failing on a day nobody
+// changed any code. Anything asserting on future/past must be computed.
+function edmontonTodayISO(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Edmonton', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+function isoPlusDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+/**
+ * The next bookable date at least `minDays` out: in season (May-Oct) and not a
+ * Sunday, both of which the endpoint refuses. `today + 7` keeps today's
+ * weekday, so without the Sunday skip this would rot on Sundays only.
+ */
+function futureInSeasonISO(minDays: number): string {
+  let iso = isoPlusDays(edmontonTodayISO(), minDays);
+  for (let i = 0; i < 400; i++) {
+    const month = Number(iso.slice(5, 7));
+    const isSunday = new Date(`${iso}T12:00:00Z`).getUTCDay() === 0;
+    if (month >= 5 && month <= 10 && !isSunday) return iso;
+    iso = isoPlusDays(iso, 1);
+  }
+  throw new Error('no bookable date found');
+}
+
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
   process.env.SESSION_SECRET = 'a'.repeat(64);
@@ -122,8 +152,8 @@ describe('GET /api/me', () => {
     // inside a May-Oct season, and the top-up must NOT invent winter dates to
     // reach it — that is the whole point of the seasonal cap.
     await db.insert(visit).values([
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-08-20') },
-      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date('2026-10-08') },
+      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date(futureInSeasonISO(7)) },
+      { id: crypto.randomUUID(), customerId, subscriptionId: subId, scheduledFor: new Date(futureInSeasonISO(21)) },
     ]);
     const res = mockResWithHeaders();
     await handler(await reqWithSession(customerId), res);
@@ -373,15 +403,18 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
   it('moves a visit to the requested date', async () => {
     const id = await makeCustomer();
     const v = await seedVisit(id, '2026-08-13');
+    // Must be a real future in-season date, or the endpoint correctly refuses
+    // it and this test starts failing purely because time passed.
+    const target = futureInSeasonISO(7);
 
     const res = mockResWithHeaders();
-    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-08-21' }), res);
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: target }), res);
 
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.scheduled_for).toBe('2026-08-21');
+    expect(res.body.scheduled_for).toBe(target);
     const [row] = await getDb().select().from(visit).where(eq(visit.id, v));
-    expect(row!.scheduledFor.toISOString().slice(0, 10)).toBe('2026-08-21');
+    expect(row!.scheduledFor.toISOString().slice(0, 10)).toBe(target);
   });
 
   it('refuses a date outside the cleaning season', async () => {

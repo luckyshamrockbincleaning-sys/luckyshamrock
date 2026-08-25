@@ -376,6 +376,21 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   `payment` 23505 → 500. The `payment` row is inserted as `pending` BEFORE the
   Stripe call and updated after, so a crash mid-charge still leaves a row for the
   webhook to reconcile (no charge-without-ledger-row).
+- **🔴 Done must never complete with NO settlement recorded.** `payment_method`
+  defaults to `card_on_file`, so a walk-up with no saved card used to be
+  completed with **no `payment` row at all** — job done, money owed, nothing in
+  the ledger. It happened twice (Dona Taverner 2026-08-10, Chris Wims
+  2026-08-18) and both needed a developer editing the database. Now:
+  `stopColumns` exposes `has_card`, /ops **disables "Card on file" when there
+  isn't one and preselects nothing**, and Done stays disabled until a method is
+  picked. The server stays permissive on purpose (Done never blocks) and still
+  returns `nothing_collected`.
+- **`POST /api/operator/act {op:'settle'}` records money already taken** for a
+  visit that is already `done` — cash/terminal/etransfer only, since
+  `card_on_file` and `qr` are live payment flows rather than bookkeeping.
+  Claims the row with a status-guarded UPDATE so a double-tap 409s instead of
+  writing two payments. This exists so a mis-settled job is fixable **from
+  /ops**; before it, Needs attention listed such visits with no action at all.
 - **Failed charges are surfaced, not silent.** A declined card flags the visit
   `payment_status='failed'` (never blocks Done) and shows up in: the operator
   `GET /api/operator/attention` list (with a `{op:'retry'}` re-charge via
