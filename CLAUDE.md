@@ -364,6 +364,19 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   and unchaseable in August 2026. Enforced in `newJobSchema.superRefine` and
   mirrored in the `/ops` form so the operator sees it while the customer is
   still standing there.
+- **The operator can SEE the email we send to.** `stopColumns` selects
+  `customer.email`; `toOperatorVisit` exposes `email` + `has_email`, with
+  **walk-up placeholders (`walkup+xxxxxxxx@`) mapped to null** — rendering one
+  looks like a real address a receipt could be chased to. Shown on the stop,
+  history and attention cards. Before this the email was never sent to /ops at
+  all, so a wrong one was invisible: keltie Herzog's booking carried another
+  customer's address for three days (2026-08-23 → 26) and it only surfaced
+  because that customer received mail about someone else's clean.
+- **"Edit details" is available AFTER a job is done**, including on history
+  cards, and prefills the current values. A bad email reveals itself when the
+  done email bounces or lands with the wrong person — gating the fix on the job
+  still being open put it out of reach exactly when it was needed. Only
+  `cancelled` stays locked. The server never restricted this; it was UI-only.
 - **`POST /api/operator/customer` patches a customer's details** (name, street,
   city, phone, email) — only the fields supplied. Details typed one-handed at a
   gate get typos, and customers often give an email only after the job is done.
