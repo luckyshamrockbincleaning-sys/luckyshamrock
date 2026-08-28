@@ -441,7 +441,9 @@ function NewJobCard({ onCreated }) {
 function EditCustomerCard({ stop, onSaved, onClose }) {
   const [form, setForm] = useState({
     name: stop.customer_name || '', street: stop.street || '',
-    phone: stop.phone || '', email: '',
+    // Prefilled so the operator can read it back to the customer and fix a
+    // character, instead of retyping a whole address blind.
+    phone: stop.phone || '', email: stop.email || '',
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -652,6 +654,11 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
         <span>{binsLabel}</span>
         {stop.bin_location && <span>📍 {BIN_LOCATION_LABEL[stop.bin_location] || stop.bin_location}</span>}
         {stop.phone && <a className="ops-phone" href={`tel:${stop.phone}`}>{stop.phone}</a>}
+        {/* The address photos + receipt go to. Visible so a wrong one gets
+            caught here rather than by a customer receiving someone else's mail. */}
+        {stop.email
+          ? <span style={{ wordBreak: 'break-all' }}>✉ {stop.email}</span>
+          : <span style={{ color: '#8a6414' }}>✉ no email on file</span>}
         {/* Referral credit comes off automatically at Done. Surfaced here so a
             smaller-than-expected charge is never a surprise after the fact. */}
         {stop.credit_cents > 0 && !isDone && (
@@ -824,7 +831,10 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
           <button className="btn btn-skip ops-btn" disabled={busy || submitting} onClick={() => onAction('skip', stop)}>Skip</button>
         )}
         <button className="btn btn-ghost ops-btn" disabled={busy || submitting} onClick={() => onAction('note', stop)}>Note</button>
-        {!isDone && !isCancelled && (
+        {/* Deliberately NOT gated on the job being open: a wrong email usually
+            reveals itself when the done email bounces or lands with the wrong
+            person, which is after Done. Cancelled jobs stay locked. */}
+        {!isCancelled && (
           <button className="btn btn-ghost ops-btn" disabled={busy || submitting} onClick={() => setEditing(!editing)}>
             {editing ? 'Close' : 'Edit details'}
           </button>
@@ -883,7 +893,8 @@ const HISTORY_STATUS_STYLE = {
   cancelled: { label: 'cancelled', color: '#5a4632', bg: 'var(--cream-2, #f3efe6)' },
 };
 
-function HistoryCard({ item }) {
+function HistoryCard({ item, onRefresh }) {
+  const [editing, setEditing] = useState(false);
   const st = HISTORY_STATUS_STYLE[item.status] || HISTORY_STATUS_STYLE.done;
   const pay = PAY_BADGE[item.payment_status];
   const bins = item.bin_count ? `${item.bin_count} bin${item.bin_count > 1 ? 's' : ''}` : null;
@@ -910,8 +921,26 @@ function HistoryCard({ item }) {
         {collected && <span>{collected} collected</span>}
         {item.credit_cents > 0 && <span>incl. ${(item.credit_cents / 100).toFixed(2)} credit</span>}
         {item.phone && <a className="ops-phone" href={`tel:${item.phone}`}>{item.phone}</a>}
+        {item.email
+          ? <span style={{ wordBreak: 'break-all' }}>✉ {item.email}</span>
+          : <span style={{ color: '#8a6414' }}>✉ no email on file</span>}
       </div>
       {item.notes && <div className="ops-notes">{item.notes}</div>}
+      {/* A wrong email usually surfaces AFTER the job — the done email bounces
+          or lands with the wrong person. This is the screen the operator is on
+          when that happens, so the fix belongs here. */}
+      <div className="ops-actions">
+        <button className="btn btn-ghost ops-btn" onClick={() => setEditing(!editing)}>
+          {editing ? 'Close' : 'Edit details'}
+        </button>
+      </div>
+      {editing && (
+        <EditCustomerCard
+          stop={item}
+          onClose={() => setEditing(false)}
+          onSaved={() => { setEditing(false); if (onRefresh) onRefresh(); }}
+        />
+      )}
     </div>
   );
 }
@@ -944,6 +973,9 @@ function AttentionCard({ item, onAction, busy }) {
       <div className="ops-meta">
         <span>Owed {amt}</span>
         {item.customer.phone && <a className="ops-phone" href={`tel:${item.customer.phone}`}>{item.customer.phone}</a>}
+        {item.customer.email
+          ? <span style={{ wordBreak: 'break-all' }}>✉ {item.customer.email}</span>
+          : <span style={{ color: '#8a6414' }}>✉ no email on file</span>}
       </div>
       {item.failure_reason && <div className="ops-notes">{item.failure_reason}</div>}
       <div className="ops-actions" style={{ flexWrap: 'wrap', gap: 6 }}>
@@ -1337,7 +1369,7 @@ function OpsApp() {
         ))
       ) : view === 'history' ? (
         <>
-          {data.stops.map((s) => <HistoryCard key={s.id} item={s} />)}
+          {data.stops.map((s) => <HistoryCard key={s.id} item={s} onRefresh={() => load(view)} />)}
           {data.hasMore && (
             <div className="ops-card" style={{ textAlign: 'center' }}>
               <p className="muted" style={{ margin: 0, fontSize: 13 }}>

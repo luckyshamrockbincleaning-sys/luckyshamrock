@@ -164,6 +164,7 @@ const stopColumns = {
   headingThereAt: visit.headingThereAt,
   doneAt: visit.doneAt,
   name: customer.name,
+  email: customer.email,
   phone: customer.phone,
   street: customer.street,
   city: customer.city,
@@ -1559,6 +1560,7 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
         amountCents: payment.amountCents,
         failureReason: payment.failureReason,
         name: customer.name,
+        email: customer.email,
         phone: customer.phone,
         street: customer.street,
         city: customer.city,
@@ -1597,7 +1599,16 @@ export async function handleAttention(req: VercelRequest, res: VercelResponse): 
         amount_cents: r.amountCents ?? null,
         failure_reason: r.failureReason ?? null,
         has_card: Boolean(r.hasCard),
-        customer: { name: r.name, phone: r.phone, street: r.street, city: r.city, postal_code: r.postalCode },
+        customer: {
+          name: r.name,
+          // Same placeholder rule as the stop DTO — a walkup+ address is
+          // not somewhere a receipt can be chased to.
+          email: r.email && !isPlaceholderEmail(r.email) ? r.email : null,
+          phone: r.phone,
+          street: r.street,
+          city: r.city,
+          postal_code: r.postalCode,
+        },
       });
     }
     res.status(200).json({ status: 'ok', visits });

@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { timingSafeEqual } from 'node:crypto';
 import type { VercelRequest } from '@vercel/node';
+import { isPlaceholderEmail } from './walkup-email.js';
 
 /**
  * Operator authentication — a separate session from the customer `ls_session`.
@@ -122,6 +123,7 @@ export interface OperatorVisitRow {
   headingThereAt: Date | null;
   doneAt: Date | null;
   name: string;
+  email?: string | null;
   phone: string | null;
   street: string;
   city: string;
@@ -141,6 +143,13 @@ export function toOperatorVisit(r: OperatorVisitRow) {
     customer_id: r.customerId,
     scheduled_for: r.scheduledFor.toISOString().slice(0, 10),
     customer_name: r.name,
+    // The address photos and receipts go to. Shown on the card so a wrong one
+    // is visible BEFORE a customer complains — keltie Herzog's emails reached
+    // a different customer for three days because nothing here displayed it.
+    // Walk-up placeholders (walkup+xxxxxxxx@) are reported as no email at all;
+    // rendering one looks like a real address the operator can rely on.
+    email: r.email && !isPlaceholderEmail(r.email) ? r.email : null,
+    has_email: Boolean(r.email) && !isPlaceholderEmail(r.email ?? ''),
     phone: r.phone,
     street: r.street,
     city: r.city,
