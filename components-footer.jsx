@@ -9,6 +9,12 @@ const { useState: useStateFt } = React;
 // 2026-08-01 when the first genuine review landed: one real quote sitting
 // beside fabricated ones lends them credibility, which is worse than either
 // alone. Add to this list only by copying a published review.
+//
+// Sourced from the Google Business Profile on 2026-08-31: 5.0 across 5 reviews
+// (a 5.0 mean over 5 ratings means every one is 5 stars). Three of those five
+// carry written text; the other two — Mia Kang, Bri Adam — are ratings only,
+// so there is nothing to quote and they are deliberately absent. Names are
+// shortened to first name + last initial, matching how Anna's was published.
 const Testimonials = () => {
   const cards = [
     {
@@ -17,6 +23,22 @@ const Testimonials = () => {
       name: "Anna B.",
       meta: "Google review · Local Guide",
       avatar: "A",
+    },
+    {
+      stars: 5,
+      quote: "Excellent job cleaning!! Great communication highly recommended for bin cleaning!!",
+      name: "Aaron M.",
+      meta: "Google review · Local Guide",
+      avatar: "A",
+    },
+    {
+      // Quoted exactly as published, "definetly" included. Tidying a real
+      // person's words is the same class of thing as inventing them.
+      stars: 5,
+      quote: "Both my garbage and compost bins look and smell great! Will definetly be doing the seasonal cleans next year!!",
+      name: "Teri L.",
+      meta: "Google review",
+      avatar: "T",
     },
   ];
 
