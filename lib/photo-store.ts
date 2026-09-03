@@ -38,8 +38,38 @@ export async function putVisitPhoto(
   return blob.url;
 }
 
-export async function fetchVisitPhoto(url: string): Promise<Buffer> {
-  const res = await fetch(url);
+/** Vercel Blob public URLs: https://<store>.public.blob.vercel-storage.com/... */
+const BLOB_HOST_SUFFIX = '.public.blob.vercel-storage.com';
+
+/**
+ * A URL is only fetchable if it is OUR blob store AND this visit's own folder.
+ *
+ * Done takes photo URLs from the request body, so without this the server
+ * would fetch whatever it was pointed at and attach the result to a customer's
+ * email — cloud metadata endpoints and internal services included. Pinning the
+ * prefix to the visit also stops one job's Done attaching another job's
+ * photos, which matters because these are pictures of people's property.
+ */
+export function isOwnVisitPhotoUrl(url: string, visitId: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  if (!parsed.hostname.endsWith(BLOB_HOST_SUFFIX)) return false;
+  // Reject a host that is ONLY the suffix, and any credentials in the URL.
+  if (parsed.hostname.length <= BLOB_HOST_SUFFIX.length) return false;
+  if (parsed.username || parsed.password) return false;
+  return parsed.pathname.startsWith(`/${visitPrefix(visitId)}`);
+}
+
+export async function fetchVisitPhoto(url: string, visitId: string): Promise<Buffer> {
+  if (!isOwnVisitPhotoUrl(url, visitId)) {
+    throw new Error('refusing to fetch a photo url outside this visit');
+  }
+  const res = await fetch(url, { redirect: 'error' });
   if (!res.ok) throw new Error(`photo fetch failed: ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }

@@ -136,6 +136,11 @@ const BIN_LOCATION_LABEL = {
 };
 
 const CLEAN_PHOTO_MAX_SIDE = 1600;
+// Above the self-serve cap a job can carry a lot of photos, and the customer
+// opens the email on mobile data. 1100 keeps even an eight-bin email under
+// ~3.5MB without dropping a single bin's proof.
+const CLEAN_PHOTO_MAX_SIDE_MANY = 1100;
+const MANY_BINS = 3;
 const CLEAN_PHOTO_QUALITY = 0.78;
 
 function readFileAsDataUrl(file) {
@@ -156,11 +161,12 @@ function loadImage(src) {
   });
 }
 
-async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
+async function prepareCleanPhoto(file, filename = 'clean-bin.jpg', binCount = 1) {
   if (!file) return null;
   const dataUrl = await readFileAsDataUrl(file);
   const img = await loadImage(dataUrl);
-  const scale = Math.min(1, CLEAN_PHOTO_MAX_SIDE / Math.max(img.width, img.height));
+  const maxSide = binCount > MANY_BINS ? CLEAN_PHOTO_MAX_SIDE_MANY : CLEAN_PHOTO_MAX_SIDE;
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
   const width = Math.max(1, Math.round(img.width * scale));
   const height = Math.max(1, Math.round(img.height * scale));
   const canvas = document.createElement('canvas');
@@ -186,6 +192,13 @@ async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
 // cleared on Done and aged out after a day.
 const PHOTO_STORE_PREFIX = 'ls-ops-photos-';
 
+// A shot is present whether it is still bytes on this phone or already a url
+// in storage. Every "do we have this photo?" check must accept both, or an
+// uploaded photo reads as missing and Done stays disabled at the door.
+function hasShot(side) {
+  return !!(side && (side.photo || side.url));
+}
+
 function savedPhotos(visitId) {
   try {
     const raw = localStorage.getItem(PHOTO_STORE_PREFIX + visitId);
@@ -197,11 +210,14 @@ function savedPhotos(visitId) {
 }
 
 // One entry per bin: bins[i] = { before: {photo,filename}?, after: {photo,filename}? }.
-function persistBinPhoto(visitId, binIndex, kind, photo, filename) {
+function persistBinPhoto(visitId, binIndex, kind, photo, filename, url) {
   try {
     const cur = savedPhotos(visitId) || { ts: Date.now(), bins: [] };
     if (!Array.isArray(cur.bins)) cur.bins = [];
-    cur.bins[binIndex] = { ...cur.bins[binIndex], [kind]: { photo, filename } };
+    // Once a photo is uploaded we keep only its url. That is what stops this
+    // store blowing the ~5MB localStorage quota on a multi-bin job — base64
+    // is only held when the upload failed and Done has to send it inline.
+    cur.bins[binIndex] = { ...cur.bins[binIndex], [kind]: { photo: url ? null : photo, filename, url: url || null } };
     cur.ts = Date.now();
     localStorage.setItem(PHOTO_STORE_PREFIX + visitId, JSON.stringify(cur));
   } catch (e) { /* storage full/blocked — degrade silently */ }
@@ -228,8 +244,10 @@ purgeStalePhotoStores();
 // One photo capture step with a live thumbnail + captured/ missing state, so
 // the operator can SEE at a glance which shots are attached before tapping Done.
 function PhotoStep({ n, title, hint, state, onChange, busy }) {
-  const ready = state.phase === 'ready' && state.photo;
-  const thumb = ready ? `data:${state.photo.mime_type};base64,${state.photo.content_base64}` : null;
+  // Ready means we HAVE the shot — bytes on this phone, or a url in storage
+  // after a tab reload ate the bytes. Only the thumbnail needs the bytes.
+  const ready = state.phase === 'ready' && (state.photo || state.url);
+  const thumb = state.photo ? `data:${state.photo.mime_type};base64,${state.photo.content_base64}` : null;
   return (
     <div
       className="ops-photo"
@@ -539,11 +557,13 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
   // One before/after pair per bin. bin 0 is the "hero" pair — it's the one
   // the server turns into the wash-GIF animation; bins 1+ always ride along
   // as plain before/after photos (see lib/operator-handlers.ts).
-  const idlePhoto = () => ({ phase: 'idle', photo: null, filename: '', message: '' });
+  const idlePhoto = () => ({ phase: 'idle', photo: null, url: null, filename: '', message: '' });
   const [bins, setBins] = useState(() => {
     const saved = savedPhotos(stop.id);
     const restore = (entry) =>
-      entry ? { phase: 'ready', photo: entry.photo, filename: entry.filename, message: 'Photo restored.' } : idlePhoto();
+      entry
+        ? { phase: 'ready', photo: entry.photo || null, url: entry.url || null, filename: entry.filename, message: 'Photo restored.' }
+        : idlePhoto();
     return Array.from({ length: binCount }, (_, i) => ({
       before: restore(saved?.bins?.[i]?.before),
       after: restore(saved?.bins?.[i]?.after),
@@ -564,7 +584,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
 
   async function doneWithDiscount() {
     if (submitting) return; // guard the impatient double-tap
-    const missingAfter = bins.findIndex((b) => !b.after.photo);
+    const missingAfter = bins.findIndex((b) => !hasShot(b.after));
     if (missingAfter !== -1) {
       setBinPhoto(missingAfter, 'after', {
         ...bins[missingAfter].after,
@@ -576,7 +596,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     // No before photo means no wash animation (bin 1) or no proof shot (other
     // bins) in the customer's email — that is sometimes intentional, but
     // never let it happen silently.
-    if (bins.some((b) => !b.before.photo)) {
+    if (bins.some((b) => !hasShot(b.before))) {
       const proceed = window.confirm(
         binCount > 1
           ? "One or more bins is missing a BEFORE photo — the customer's email will show only that bin's after photo, and bin 1 loses the wash animation if it's the one missing.\n\nTap Cancel to add the missing photo(s), or OK to finish without them."
@@ -589,7 +609,13 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     const payload = {
       discount_cents,
       payment_method: payMethod,
-      photos: bins.map((b) => ({ before: b.before.photo || undefined, after: b.after.photo })),
+      // A url when the photo reached storage; the bytes when it did not.
+      photos: bins.map((b) => ({
+        before_url: b.before.url || undefined,
+        after_url: b.after.url || undefined,
+        before: b.before.url ? undefined : (b.before.photo || undefined),
+        after: b.after.url ? undefined : (b.after.photo || undefined),
+      })),
     };
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
@@ -625,9 +651,36 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     setBinPhoto(binIndex, kind, { phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
     try {
       const filename = kind === 'before' ? 'before-bin.jpg' : 'clean-bin.jpg';
-      const photo = await prepareCleanPhoto(file, filename);
-      persistBinPhoto(stop.id, binIndex, kind, photo, file.name);
-      setBinPhoto(binIndex, kind, { phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
+      const photo = await prepareCleanPhoto(file, filename, binCount);
+      // Held on the phone first, so a failed upload still leaves the photo
+      // recoverable rather than lost between the camera and the network.
+      persistBinPhoto(stop.id, binIndex, kind, photo, file.name, null);
+      setBinPhoto(binIndex, kind, { phase: 'loading', photo, url: null, filename: file.name, message: 'Saving photo…' });
+      try {
+        const r = await fetch('/api/operator/upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            visit_id: stop.id,
+            bin_index: binIndex,
+            kind,
+            mime_type: photo.mime_type,
+            content_base64: photo.content_base64,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.url) throw new Error('upload failed');
+        persistBinPhoto(stop.id, binIndex, kind, null, file.name, data.url);
+        // The bytes stay in memory for the thumbnail — the operator confirms
+        // the shot by looking at it. Only the localStorage copy drops them,
+        // which is where the quota pressure was.
+        setBinPhoto(binIndex, kind, { phase: 'ready', photo, url: data.url, filename: file.name, message: 'Photo saved.' });
+      } catch (uploadErr) {
+        // No signal in a back alley is an ordinary operating condition here.
+        // Keep the bytes and let Done send them inline, exactly as it did
+        // before uploads existed — the job must never be blocked by storage.
+        setBinPhoto(binIndex, kind, { phase: 'ready', photo, url: null, filename: file.name, message: 'Saved on this phone.' });
+      }
     } catch (err) {
       setBinPhoto(binIndex, kind, {
         phase: 'error',
@@ -827,7 +880,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || submitting || !payMethod || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
+            disabled={busy || submitting || !payMethod || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !hasShot(b.after))}
             onClick={doneWithDiscount}
             style={submitting ? { opacity: 0.85 } : undefined}
           >

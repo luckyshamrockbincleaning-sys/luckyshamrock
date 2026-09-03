@@ -71,3 +71,48 @@ describe('sweepStalePhotos', () => {
     expect(delSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('isOwnVisitPhotoUrl — the SSRF guard', () => {
+  const V = 'v-123';
+  const ok = `https://abc123.public.blob.vercel-storage.com/visits/${V}/0-before-x.jpg`;
+
+  it('accepts our own blob url for this visit', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl(ok, V)).toBe(true);
+  });
+
+  it('refuses cloud metadata', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl('http://169.254.169.254/latest/meta-data/', V)).toBe(false);
+    expect(isOwnVisitPhotoUrl('https://169.254.169.254/latest/meta-data/', V)).toBe(false);
+  });
+
+  it('refuses localhost and internal hosts', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl('http://localhost:3000/secret', V)).toBe(false);
+    expect(isOwnVisitPhotoUrl('https://internal.svc.cluster.local/x', V)).toBe(false);
+  });
+
+  it('refuses a lookalike host', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl(`https://evil.com/.public.blob.vercel-storage.com/visits/${V}/x.jpg`, V)).toBe(false);
+    expect(isOwnVisitPhotoUrl(`https://public.blob.vercel-storage.com.evil.com/visits/${V}/x.jpg`, V)).toBe(false);
+  });
+
+  it('refuses another visit’s photos', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl(ok, 'v-other')).toBe(false);
+  });
+
+  it('refuses embedded credentials and non-https', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl(`https://u:p@abc.public.blob.vercel-storage.com/visits/${V}/x.jpg`, V)).toBe(false);
+    expect(isOwnVisitPhotoUrl(`http://abc.public.blob.vercel-storage.com/visits/${V}/x.jpg`, V)).toBe(false);
+  });
+
+  it('refuses junk', async () => {
+    const { isOwnVisitPhotoUrl } = await import('../photo-store.js');
+    expect(isOwnVisitPhotoUrl('not a url', V)).toBe(false);
+    expect(isOwnVisitPhotoUrl('', V)).toBe(false);
+  });
+});

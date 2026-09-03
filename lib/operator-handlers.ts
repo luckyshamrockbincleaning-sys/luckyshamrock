@@ -269,11 +269,12 @@ async function resolvePhotoEntry(
   entry: any,
   kind: 'before' | 'after',
   label: string,
+  visitId: string,
 ): Promise<{ ok: true; attachment: EmailAttachment | null } | { ok: false; message: string }> {
   const url = entry?.[`${kind}_url`];
   if (typeof url === 'string' && url.length > 0) {
     try {
-      const content = await fetchVisitPhoto(url);
+      const content = await fetchVisitPhoto(url, visitId);
       return {
         ok: true,
         attachment: {
@@ -292,16 +293,16 @@ async function resolvePhotoEntry(
   return parsePhotoAttachment(entry?.[kind], label);
 }
 
-async function parsePhotoPairs(body: any): Promise<{ ok: true; pairs: PhotoPair[] } | { ok: false; message: string }> {
+async function parsePhotoPairs(body: any, visitId: string): Promise<{ ok: true; pairs: PhotoPair[] } | { ok: false; message: string }> {
   if (Array.isArray(body?.photos)) {
     if (body.photos.length === 0) return { ok: false, message: 'photos must not be empty' };
     if (body.photos.length > MAX_PHOTO_PAIRS) return { ok: false, message: `photos supports at most ${MAX_PHOTO_PAIRS} bins` };
     const pairs: PhotoPair[] = [];
     for (let i = 0; i < body.photos.length; i++) {
       const entry = body.photos[i];
-      const before = await resolvePhotoEntry(entry, 'before', `photos[${i}].before`);
+      const before = await resolvePhotoEntry(entry, 'before', `photos[${i}].before`, visitId);
       if (!before.ok) return before;
-      const after = await resolvePhotoEntry(entry, 'after', `photos[${i}].after`);
+      const after = await resolvePhotoEntry(entry, 'after', `photos[${i}].after`, visitId);
       if (!after.ok) return after;
       pairs.push({ before: before.attachment, after: after.attachment });
     }
@@ -1023,7 +1024,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const surchargeCents = paymentParsed.data.surcharge_cents ?? 0;
   const surchargeReason = surchargeCents > 0 ? (paymentParsed.data.surcharge_reason ?? null) : null;
   const paymentMethod = paymentParsed.data.payment_method;
-  const photoPairs = await parsePhotoPairs(req.body);
+  const photoPairs = await parsePhotoPairs(req.body, visitId);
   if (!photoPairs.ok) {
     res.status(400).json({ status: 'invalid', message: photoPairs.message });
     return;

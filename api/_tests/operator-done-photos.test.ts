@@ -18,8 +18,10 @@ const { customer, visit } = await import('../../db/schema.js');
 const { signOperatorCookie, OPERATOR_COOKIE_NAME } = await import('../../lib/operator.js');
 const templates = await import('../../lib/email/templates.js');
 
-const URL_A = 'https://blob.example/visits/v/0-before-a.jpg';
-const URL_B = 'https://blob.example/visits/v/0-after-b.jpg';
+// Must be a real-shaped Blob url inside THIS visit's folder — anything else is
+// refused by the SSRF guard, which is the point of the guard.
+const blobUrl = (visitId: string, kind: string) =>
+  `https://store1.public.blob.vercel-storage.com/visits/${visitId}/0-${kind}-abc.jpg`;
 
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
@@ -83,7 +85,7 @@ describe('Done with uploaded photos', () => {
     const res = mockRes();
     await handleDone(await req(visitId, {
       payment_method: 'cash',
-      photos: [{ before_url: URL_A, after_url: URL_B }],
+      photos: [{ before_url: blobUrl(visitId, 'before'), after_url: blobUrl(visitId, 'after') }],
     }), res);
     expect(res.statusCode).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -94,7 +96,7 @@ describe('Done with uploaded photos', () => {
     const res = mockRes();
     await handleDone(await req(visitId, {
       payment_method: 'cash',
-      photos: [{ before_url: URL_A, after_url: URL_B }],
+      photos: [{ before_url: blobUrl(visitId, 'before'), after_url: blobUrl(visitId, 'after') }],
     }), res);
     expect(res.statusCode).toBe(200);
     await new Promise((r) => setTimeout(r, 50)); // cleanup is fire-and-forget
@@ -107,7 +109,7 @@ describe('Done with uploaded photos', () => {
     const res = mockRes();
     await handleDone(await req(visitId, {
       payment_method: 'cash',
-      photos: [{ before_url: URL_A, after_url: URL_B }],
+      photos: [{ before_url: blobUrl(visitId, 'before'), after_url: blobUrl(visitId, 'after') }],
     }), res);
     // The clean happened. A photo we cannot retrieve costs an image, not the job.
     expect(res.statusCode).toBe(200);
@@ -131,7 +133,10 @@ describe('Done with uploaded photos', () => {
     const res = mockRes();
     await handleDone(await req(visitId, {
       payment_method: 'cash',
-      photos: Array.from({ length: 6 }, () => ({ before_url: URL_A, after_url: URL_B })),
+      photos: Array.from({ length: 6 }, () => ({
+        before_url: blobUrl(visitId, 'before'),
+        after_url: blobUrl(visitId, 'after'),
+      })),
     }), res);
     expect(res.statusCode).toBe(200);
   });
@@ -162,5 +167,20 @@ describe('sweeping photos from jobs that never finished', () => {
       query: {},
     } as any, res);
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('Done refuses a photo url that is not ours', () => {
+  it('does not fetch an attacker-supplied host, and still finishes the job', async () => {
+    const visitId = await seed();
+    const res = mockRes();
+    await handleDone(await req(visitId, {
+      payment_method: 'cash',
+      photos: [{ after_url: 'http://169.254.169.254/latest/meta-data/' }],
+    }), res);
+    // The job completes — Done must never fail at a door — but nothing was
+    // fetched and nothing reaches the customer's email.
+    expect(res.statusCode).toBe(200);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
