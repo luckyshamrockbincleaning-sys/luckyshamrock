@@ -245,7 +245,42 @@ function ReferralCard({ referral }) {
 
 function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
   const [cadence, setCadence] = useState(subscription.cadence);
-  const [binCount, setBinCount] = useState(subscription.bin_count);
+
+  // Same client source as the booking form (window.LS_BIN_TYPES), same
+  // fallback rule — see bin-types-sync.test.ts.
+  const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
+    { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
+    { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
+  ];
+  const MAX_BINS = 3;
+
+  // Subscriptions taken before the bin picker have a count but no types. Seed
+  // the steppers from the count so the control still reflects what they pay
+  // for, and only send types once they actually touch it — writing a list
+  // nobody chose would be us inventing their order.
+  const [binQty, setBinQty] = useState(() => {
+    const start = {};
+    BIN_TYPE_OPTIONS.forEach((o) => { start[o.value] = 0; });
+    const stored = Array.isArray(subscription.bin_types) ? subscription.bin_types : null;
+    if (stored && stored.length > 0) {
+      stored.forEach((t) => { if (t in start) start[t] += 1; });
+    } else {
+      start[BIN_TYPE_OPTIONS[0].value] = subscription.bin_count;
+    }
+    return start;
+  });
+  const binTypes = BIN_TYPE_OPTIONS.flatMap((o) => Array(binQty[o.value] || 0).fill(o.value));
+  const binCount = binTypes.length;
+
+  function changeBinQty(value, delta) {
+    setBinQty((prev) => {
+      const next = (prev[value] || 0) + delta;
+      if (next < 0) return prev;
+      const total = BIN_TYPE_OPTIONS.reduce((n, o) => n + (o.value === value ? next : prev[o.value] || 0), 0);
+      if (total < 1 || total > MAX_BINS) return prev;
+      return { ...prev, [value]: next };
+    });
+  }
 
   const dirty = cadence !== subscription.cadence || binCount !== subscription.bin_count;
   const cancelled = subscription.status === 'cancelled';
@@ -272,15 +307,28 @@ function SubscriptionCard({ subscription, onUpdate, onCancel, busy }) {
             </div>
             <div className="field">
               <label>Bins</label>
-              <select value={binCount} onChange={(e) => setBinCount(Number(e.target.value))} disabled={busy}>
-                <option value={1}>1 bin</option>
-                <option value={2}>2 bins</option>
-                <option value={3}>3 bins</option>
-              </select>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+                {BIN_TYPE_OPTIONS.map((opt) => {
+                  const n = binQty[opt.value] || 0;
+                  return (
+                    <div key={opt.value} style={{display: 'flex', alignItems: 'center', gap: 10}}>
+                      <span className="bin-swatch" style={{background: opt.swatch}} aria-hidden="true"/>
+                      <span style={{flex: 1}}>{opt.label}</span>
+                      <button type="button" className="bin-step" aria-label={`One fewer ${opt.label}`}
+                        disabled={busy || n === 0 || binCount <= 1}
+                        onClick={() => changeBinQty(opt.value, -1)}>−</button>
+                      <span aria-live="polite" style={{minWidth: 16, textAlign: 'center', fontWeight: 700}}>{n}</span>
+                      <button type="button" className="bin-step" aria-label={`One more ${opt.label}`}
+                        disabled={busy || binCount >= MAX_BINS}
+                        onClick={() => changeBinQty(opt.value, +1)}>+</button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
           <div style={{display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap'}}>
-            <button className="btn btn-primary" disabled={!dirty || busy} onClick={() => onUpdate({ cadence, bin_count: binCount })}>
+            <button className="btn btn-primary" disabled={!dirty || busy} onClick={() => onUpdate({ cadence, bin_count: binCount, bin_types: binTypes })}>
               {busy ? 'Saving…' : 'Save changes'}
             </button>
             <button className="btn btn-danger" disabled={busy} onClick={onCancel}>

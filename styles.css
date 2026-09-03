@@ -793,6 +793,25 @@ footer::before { background: var(--green-darker); }
   border: 1px solid rgba(0, 0, 0, 0.22);
   box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.15);
 }
+/* Quantity steppers beside each bin. 44px targets because this is tapped on a
+   phone, often one-handed, and a mis-tap changes what someone pays. */
+.bin-step {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 2px solid rgba(0, 0, 0, 0.14);
+  background: #fff;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  color: #1d7a3d;
+  cursor: pointer;
+}
+.bin-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .service-option .so-title {
   font-family: 'Nunito', sans-serif;
   font-weight: 800;

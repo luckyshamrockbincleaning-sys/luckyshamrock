@@ -133,8 +133,37 @@ const Booking = ({ tweaks }) => {
   // The customer picks WHICH bins; the count follows from that. Asking for a
   // number alone meant a one-bin order arrived with no way to tell the black
   // bin from the green one.
-  const [binTypes, setBinTypes] = useStateBk(['garbage']);
+  // Same single client source, same fallback rule (see bin-types-sync.test.ts).
+  const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
+    { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
+    { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
+  ];
+
+  // Quantities per type, not a set of ticked types: a household can have two
+  // black bins, and an optional "how many?" beside a tick box would get left
+  // blank and we'd be guessing again.
+  const [binQty, setBinQty] = useStateBk({ garbage: 1, organics: 0 });
+  const binTypes = React.useMemo(() => {
+    const out = [];
+    BIN_TYPE_OPTIONS.forEach((opt) => {
+      for (let i = 0; i < (binQty[opt.value] || 0); i++) out.push(opt.value);
+    });
+    return out;
+  }, [binQty]);
   const bins = binTypes.length;
+  const MAX_BINS = 3; // self-serve cap; the operator's walk-up form goes higher
+
+  function changeBinQty(value, delta) {
+    setBinQty((prev) => {
+      const cur = prev[value] || 0;
+      const next = cur + delta;
+      if (next < 0) return prev;
+      const total = BIN_TYPE_OPTIONS.reduce((n, o) => n + (o.value === value ? next : prev[o.value] || 0), 0);
+      // Never let them reach zero bins — there'd be no job left to book.
+      if (total < 1 || total > MAX_BINS) return prev;
+      return { ...prev, [value]: next };
+    });
+  }
   const [selectedDay, setSelectedDay] = useStateBk(null);
   const [contact, setContact] = useStateBk({
     name: '',
@@ -193,12 +222,6 @@ const Booking = ({ tweaks }) => {
   // inline fallback only applies if that script fails to load.
   const P = (typeof window !== 'undefined' && window.LS_PRICING) ||
     { oneoff: 45, monthly: 35, seasonalSeason: 105, seasonalPerWash: 35, extraBinPerClean: 12 };
-
-  // Same single client source, same fallback rule (see bin-types-sync.test.ts).
-  const BIN_TYPE_OPTIONS = (typeof window !== 'undefined' && window.LS_BIN_TYPES) || [
-    { value: 'garbage', label: 'Black · garbage', swatch: '#3a3a3c' },
-    { value: 'organics', label: 'Green · organics', swatch: '#2f7d32' },
-  ];
 
   const services = [
     { id: 'one-time', title: 'One-Time', meta: 'Try us once', price: P.oneoff },
@@ -500,32 +523,41 @@ const Booking = ({ tweaks }) => {
                   <label>Which bins should we clean?</label>
                   <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                     {BIN_TYPE_OPTIONS.map(opt => {
-                      const on = binTypes.includes(opt.value);
+                      const n = binQty[opt.value] || 0;
+                      const atMax = bins >= MAX_BINS;
                       return (
-                        <button
+                        <div
                           key={opt.value}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={() => setBinTypes(
-                            on
-                              // Never let them deselect everything — there'd
-                              // be no job left to book.
-                              ? (binTypes.length > 1 ? binTypes.filter(v => v !== opt.value) : binTypes)
-                              // Rebuild from the canonical list so the order is
-                              // always the same one the server stores.
-                              : BIN_TYPE_OPTIONS
-                                  .map(o => o.value)
-                                  .filter(v => v === opt.value || binTypes.includes(v)),
-                          )}
-                          className={`service-option ${on ? 'selected' : ''}`}
+                          className={`service-option ${n > 0 ? 'selected' : ''}`}
                           style={{display: 'flex', alignItems: 'center', gap: 10, padding: '13px 14px'}}
                         >
                           <span className="bin-swatch" style={{background: opt.swatch}} aria-hidden="true"/>
-                          <span className="so-title" style={{margin: 0}}>{opt.label}</span>
-                        </button>
+                          <span className="so-title" style={{margin: 0, flex: 1}}>{opt.label}</span>
+                          <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+                            <button
+                              type="button"
+                              className="bin-step"
+                              aria-label={`One fewer ${opt.label}`}
+                              disabled={n === 0 || bins <= 1}
+                              onClick={() => changeBinQty(opt.value, -1)}
+                            >−</button>
+                            <span aria-live="polite" style={{minWidth: 16, textAlign: 'center', fontWeight: 700}}>{n}</span>
+                            <button
+                              type="button"
+                              className="bin-step"
+                              aria-label={`One more ${opt.label}`}
+                              disabled={atMax}
+                              onClick={() => changeBinQty(opt.value, +1)}
+                            >+</button>
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
+                  <p className="hint" style={{marginTop: 8}}>
+                    {bins} bin{bins === 1 ? '' : 's'}
+                    {bins >= MAX_BINS ? ' · that\u2019s our online maximum — call us for more' : ''}
+                  </p>
                 </div>
 
                 <div className="booking-summary">
