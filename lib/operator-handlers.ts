@@ -849,6 +849,7 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
         customerId: visit.customerId,
         email: customer.email,
         name: customer.name,
+        street: customer.street,
       })
       .from(visit)
       .innerJoin(customer, eq(visit.customerId, customer.id))
@@ -872,7 +873,7 @@ export async function handleNotify(req: VercelRequest, res: VercelResponse): Pro
 
     // Idempotent on (visitId, 'on_our_way') — a double-tap sends no second email.
     // Skip the email for placeholder addresses (walk-up customers who gave no email).
-    const tpl = onOurWayTemplate({ name: row.name });
+    const tpl = onOurWayTemplate({ name: row.name, street: row.street });
     const result = isPlaceholderEmail(row.email)
       ? { skipped: true as const }
       : await sendAndLog({
