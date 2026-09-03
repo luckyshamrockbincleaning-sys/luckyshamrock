@@ -87,10 +87,16 @@ at 12/12 on Hobby.
 Flow:
 
 1. `/ops` prepares the photo as it does now (`prepareCleanPhoto`, max side
-   1600, JPEG q0.78) and uploads it to Vercel Blob **the moment it is taken**,
-   using a client-upload token minted by the `upload` op. Bytes go phone →
-   Blob, never through the function, which also removes the 4.5 MB request-body
-   limit that base64 currently strains.
+   1600, JPEG q0.78) and POSTs it to the `upload` op **the moment it is taken**.
+   The op writes it to Vercel Blob with a server-side `put()` and returns the
+   URL.
+
+   **Not the Blob client-upload SDK.** `/ops` runs React through
+   Babel-standalone with no build step, so there is no module system to import
+   `@vercel/blob/client` into. One photo per request is ~500 KB against a
+   4.5 MB body limit and carries no timeout risk, which makes the server-side
+   write both simpler and sufficient. The limit only ever strained because
+   Done batched every photo into one request.
 2. Each photo step shows its own upload state (pending / uploading / stored).
 3. **Done sends URLs, not bytes.** The request becomes small and fast; the
    5–10s dead tap that needed a progress indicator on 2026-08-01 goes away.
@@ -105,6 +111,11 @@ fails — no signal in a back alley, a real operating condition — `/ops` keeps
 the base64 in memory and Done sends it inline exactly as it does today. Signal
 loss degrades to current behaviour instead of blocking the job. This is why the
 legacy path must **not** be removed as part of this work.
+
+The per-visit localStorage store (`ls-ops-photos-<visitId>`, added 2026-07-13
+because Android silently reloads the tab when the camera opens) now holds URLs
+instead of base64. That store was always at risk of blowing the ~5 MB
+localStorage quota on a 3-bin job; holding URLs removes the risk entirely.
 
 **Orphan cleanup.** Photos uploaded when Done is never tapped are swept by
 prefix on the next `today` load, anything older than 48h. Folded into an
