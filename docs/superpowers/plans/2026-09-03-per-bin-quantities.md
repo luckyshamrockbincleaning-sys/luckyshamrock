@@ -14,39 +14,33 @@
 
 | Task | State |
 |---|---|
-| 1 — multiset | ✅ done (`629cd97`) |
-| 2 — caps split by caller | ✅ done (`629cd97`) |
-| 3 — /manage 500 | ✅ done (`2103741`), 500 reproduced first |
-| 4 — upload op + photo store | ⛔ blocked: needs a Vercel Blob store + `BLOB_READ_WRITE_TOKEN` |
-| 5 — Done takes urls | ⛔ blocked on task 4 (per-repeat email labels already shipped in `629cd97`) |
-| 6 — orphan sweep | ⛔ blocked on task 4 |
-| 7 — /ops steppers + upload | 🟡 steppers done (`f45e071`); upload-as-taken blocked on task 4 |
-| 8 — booking + /manage steppers | ✅ done (`c31967d`) |
-| 9 — review, deploy, verify | ⛔ not started; deploy is a separate approval |
+| 1 — multiset | ✅ `629cd97` |
+| 2 — caps split by caller | ✅ `629cd97` |
+| 3 — /manage 500 | ✅ `2103741` — 500 reproduced first |
+| 4 — upload op + photo store | ✅ `76f1286` — an op, still 12/12 functions |
+| 5 — Done takes urls | ✅ `76f1286` |
+| 6 — orphan sweep | ✅ `76f1286` — 48h, on /today |
+| 7 — /ops steppers + upload | ✅ `f45e071` + `7226cc1` |
+| 8 — booking + /manage steppers | ✅ `c31967d` |
+| 9 — review, deploy, verify | ⛔ deploy blocked (separate approval); live verification owed |
 
-**539 tests green, typecheck clean, all JSX parse-checked.** Nothing merged to
+**566 tests green, typecheck clean, all JSX parse-checked.** Nothing merged to
 `main`, nothing deployed.
 
-⚠️ **Merge note:** branch `booking-3ds-resume` restores `binTypes` via
-`setBinTypes(saved.binTypes)`, which this branch replaced with `binQty`. Whichever
-merges second must map the saved list back into quantities.
+**Security fix folded in (`7226cc1`):** `fetchVisitPhoto` took a url from the
+request body — SSRF with an exfiltration path, since the fetched bytes are
+attached to a customer's email. Now restricted to our own Blob host, https
+only, no credentials, no redirects, and scoped to the visit's own prefix.
 
-## Global Constraints
+⚠️ **Merge note:** branch `booking-3ds-resume` restores bins via
+`setBinTypes(saved.binTypes)`, which this branch replaced with `binQty`.
+Whichever merges second must map the saved list into quantities.
 
-- **Vercel Hobby is at 12/12 functions.** No new file under `api/`. New routes are ops on `api/operator/[action].ts`.
-- **Multi-segment dynamic routes do not reach the function** in this project's Vercel runtime. Single dynamic segment only; everything else goes in the body.
-- **No build step.** `ops/*.jsx`, `components-*.jsx`, `manage/*.jsx` are served raw and compiled by Babel in the browser. No imports, no npm modules, no JSX-only-in-build syntax. Plain `<script>` globals only.
-- **`bin_count` is the source of truth for money and photo pairing.** `bin_types` is the descriptive companion; they must agree or the request is rejected, never reconciled.
-- **Canonical sort order is load-bearing.** Photos, per-bin email sections and the receipt are keyed by position, so bin *n* must mean the same bin every visit.
-- **Self-serve cap: 3 bins. Walk-up cap: 10** (a typo guard, not a policy).
-- **Prices unchanged:** first bin at plan rate, `$12` per extra bin. `pricing.js` ↔ `lib/pricing.ts` drift guard must stay green.
-- **Photos are never retained.** Deleted once the done email sends.
-- **The legacy inline `before_photo` / `clean_photo` path must NOT be removed** — it is the no-signal fallback.
-- Run `npm test` (vitest, real Neon test DB) and `npm run typecheck` before every commit. Baseline is **524 passing**.
-
-### ⚠️ AB action required before Task 4
-
-A Vercel Blob store must exist on the `luckyshamrock` project and expose `BLOB_READ_WRITE_TOKEN` to Production, Preview and Development. Tasks 1–3 do not need it; Task 4 onward does. Blob is free within the Hobby allotment and this design deletes photos after each send, so steady-state storage is only in-flight jobs.
+### Owed at deploy
+- Confirm `BLOB_READ_WRITE_TOKEN` is present on all three environments.
+- Live-verify on 390×844: a 2-black-1-green booking at $59; a 6-bin walk-up;
+  a Done with the network cut mid-job (inline fallback); blobs gone after the
+  email; a /manage bin-count change on a subscription with types.
 
 ---
 
