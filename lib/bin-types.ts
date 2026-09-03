@@ -9,7 +9,10 @@
  *
  * `bin_count` remains the source of truth for money and for photo pairing;
  * this is the descriptive companion, and the two are kept in step by a CHECK
- * constraint (`*_bin_types_match_count`).
+ * constraint (`*_bin_types_match_count`). The list is a MULTISET — ['garbage',
+ * 'garbage', 'organics'] is two black bins and a green one — so that
+ * constraint is now the whole invariant rather than a side effect of the
+ * entries being distinct.
  *
  * Dependency-light on purpose — imported by request-path code and by the
  * email templates.
@@ -49,15 +52,19 @@ function isBinType(value: string): value is BinType {
  */
 export function normalizeBinTypes(input: unknown): BinType[] | null {
   if (!Array.isArray(input) || input.length === 0) return null;
-  const out = new Set<BinType>();
+  const out: BinType[] = [];
   for (const raw of input) {
     if (typeof raw !== 'string') return null;
     const v = raw.trim().toLowerCase();
     if (!isBinType(v)) return null;
-    out.add(v);
+    out.push(v);
   }
-  if (out.size === 0) return null;
-  return [...out].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!);
+  if (out.length === 0) return null;
+  // A MULTISET, not a set: a household with two black bins is a real customer.
+  // Distinctness used to stand in for the count agreeing with bin_count; now
+  // the database CHECK constraint carries that job outright, which is a
+  // stronger guarantee than the one it replaces.
+  return out.sort((a, b) => ORDER.get(a)! - ORDER.get(b)!);
 }
 
 /**
@@ -67,5 +74,38 @@ export function normalizeBinTypes(input: unknown): BinType[] | null {
 export function describeBins(types: readonly string[] | null | undefined, count: number): string {
   const normalized = types && types.length > 0 ? normalizeBinTypes([...types]) : null;
   if (normalized === null) return `${count} bin${count === 1 ? '' : 's'}`;
-  return normalized.map((t) => BIN_TYPE_SHORT[t]).join(' + ');
+  const totals = tally(normalized);
+  return [...totals.entries()]
+    .map(([t, n]) => (n > 1 ? `${BIN_TYPE_SHORT[t]} ×${n}` : BIN_TYPE_SHORT[t]))
+    .join(' + ');
+}
+
+function tally(types: readonly BinType[]): Map<BinType, number> {
+  const totals = new Map<BinType, number>();
+  for (const t of types) totals.set(t, (totals.get(t) ?? 0) + 1);
+  return totals;
+}
+
+/**
+ * One display label per bin position, numbered ONLY where a type repeats.
+ *
+ * A lone green bin reads "Green bin", never "Green bin 1" — the number would
+ * imply a second one exists and was missed. Legacy rows with no types fall
+ * back to positions so the photo steps still have something to say.
+ */
+export function binLabelsFor(
+  types: readonly string[] | null | undefined,
+  count: number,
+): string[] {
+  const normalized = types && types.length > 0 ? normalizeBinTypes([...types]) : null;
+  if (normalized === null) {
+    return Array.from({ length: Math.max(1, count) }, (_, i) => `Bin ${i + 1}`);
+  }
+  const totals = tally(normalized);
+  const seen = new Map<BinType, number>();
+  return normalized.map((t) => {
+    const n = (seen.get(t) ?? 0) + 1;
+    seen.set(t, n);
+    return totals.get(t)! > 1 ? `${BIN_TYPE_SHORT[t]} ${n}` : BIN_TYPE_SHORT[t];
+  });
 }

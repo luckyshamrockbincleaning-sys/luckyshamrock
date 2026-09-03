@@ -5,6 +5,7 @@ import {
   BIN_TYPE_SHORT,
   normalizeBinTypes,
   describeBins,
+  binLabelsFor,
 } from '../bin-types.js';
 
 describe('bin type vocabulary', () => {
@@ -33,8 +34,11 @@ describe('normalizeBinTypes', () => {
     expect(normalizeBinTypes(['organics', 'garbage'])).toEqual(['garbage', 'organics']);
   });
 
-  it('drops duplicates', () => {
-    expect(normalizeBinTypes(['garbage', 'garbage'])).toEqual(['garbage']);
+  // Changed deliberately on 2026-09-03: duplicates used to be dropped, which
+  // made "two black bins" unsayable. bin_types is now a multiset and the
+  // database CHECK against bin_count is what keeps it honest.
+  it('keeps duplicates — two black bins is a real order', () => {
+    expect(normalizeBinTypes(['garbage', 'garbage'])).toEqual(['garbage', 'garbage']);
   });
 
   it('rejects unknown values rather than guessing', () => {
@@ -73,5 +77,51 @@ describe('describeBins', () => {
     expect(describeBins(null, 2)).toBe('2 bins');
     expect(describeBins(null, 1)).toBe('1 bin');
     expect(describeBins([], 3)).toBe('3 bins');
+  });
+});
+
+describe('normalizeBinTypes — multiset', () => {
+  it('preserves duplicates', () => {
+    expect(normalizeBinTypes(['garbage', 'garbage'])).toEqual(['garbage', 'garbage']);
+  });
+
+  it('sorts into canonical order regardless of input order', () => {
+    expect(normalizeBinTypes(['organics', 'garbage', 'garbage'])).toEqual([
+      'garbage', 'garbage', 'organics',
+    ]);
+  });
+
+  it('still rejects an unknown type', () => {
+    expect(normalizeBinTypes(['garbage', 'recycling'])).toBeNull();
+  });
+
+  it('still rejects an empty selection', () => {
+    expect(normalizeBinTypes([])).toBeNull();
+  });
+});
+
+describe('binLabelsFor', () => {
+  it('numbers only within a repeated type', () => {
+    expect(binLabelsFor(['garbage', 'garbage', 'organics'], 3)).toEqual([
+      'Black bin 1', 'Black bin 2', 'Green bin',
+    ]);
+  });
+
+  it('leaves a lone bin unnumbered', () => {
+    expect(binLabelsFor(['garbage'], 1)).toEqual(['Black bin']);
+  });
+
+  it('falls back to positions for legacy rows with no types', () => {
+    expect(binLabelsFor(null, 2)).toEqual(['Bin 1', 'Bin 2']);
+  });
+});
+
+describe('describeBins — repeats', () => {
+  it('compresses repeats', () => {
+    expect(describeBins(['garbage', 'garbage', 'organics'], 3)).toBe('Black bin ×2 + Green bin');
+  });
+
+  it('still falls back to the bare count for legacy rows', () => {
+    expect(describeBins(null, 2)).toBe('2 bins');
   });
 });

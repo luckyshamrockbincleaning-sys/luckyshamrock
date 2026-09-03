@@ -334,13 +334,27 @@ describe('POST /api/operator/visit/:id/done', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('returns 400 for more than 3 bins', async () => {
+    // The ceiling moved from 3 to 10 on 2026-09-03: the walk-up form is
+    // uncapped in practice, and 10 is a typo guard rather than a policy limit.
+    it('accepts a six-bin job', async () => {
       const c = await seedCustomer();
       const v1 = await addVisit(c, '2026-06-10');
 
       const res = mockRes();
       await handler(await req(true, v1, 'POST', {
-        photos: [1, 2, 3, 4].map((n) => ({ after: fakeAttachment(`bin${n}-after`) })),
+        photos: [1, 2, 3, 4, 5, 6].map((n) => ({ after: fakeAttachment(`bin${n}-after`) })),
+      }), res);
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('returns 400 above the typo guard', async () => {
+      const c = await seedCustomer();
+      const v1 = await addVisit(c, '2026-06-10');
+
+      const res = mockRes();
+      await handler(await req(true, v1, 'POST', {
+        photos: Array.from({ length: 11 }, (_, i) => ({ after: fakeAttachment(`bin${i}-after`) })),
       }), res);
 
       expect(res.statusCode).toBe(400);

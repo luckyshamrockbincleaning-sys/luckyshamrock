@@ -49,7 +49,7 @@ import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import { isInSeason, seasonEnd } from './season.js';
-import { normalizeBinTypes, describeBins, BIN_TYPES, BIN_TYPE_SHORT, type BinType } from './bin-types.js';
+import { normalizeBinTypes, describeBins, binLabelsFor } from './bin-types.js';
 import { generateVisitDates, type PickupDay } from './schedule.js';
 import QRCode from 'qrcode';
 
@@ -94,10 +94,13 @@ const newJobSchema = z
     // about a locked gate or a bin that never came out.
     phone: z.string().trim().min(1).max(40).optional(),
     postal_code: z.string().trim().max(10).optional(),
-    bin_count: z.number().int().min(1).max(3).default(1),
+    // A typo guard, not a policy limit: 99 would generate 198 photo steps.
+    // Shea's form is deliberately uncapped in practice — a customer with more
+    // bins than the website sells is exactly who he creates a walk-up for.
+    bin_count: z.number().int().min(1).max(10).default(1),
     // Which bins. Optional for older callers; when present it must agree
     // with bin_count, which is what gets priced.
-    bin_types: z.array(z.string()).max(BIN_TYPES.length).optional(),
+    bin_types: z.array(z.string()).max(10).optional(),
     email: z.string().trim().toLowerCase().email().optional(),
     name: z.string().trim().min(1).max(120).optional(),
     city: z.string().trim().min(1).max(120).optional(),
@@ -244,7 +247,7 @@ interface PhotoPair {
   after: EmailAttachment | null;
 }
 
-const MAX_PHOTO_PAIRS = 3; // matches the bin_count ceiling (booking + walk-up job forms)
+const MAX_PHOTO_PAIRS = 10; // matches the walk-up bin_count ceiling
 
 /**
  * A visit's Done photos, one pair per bin. Preferred shape is
@@ -426,7 +429,7 @@ export async function handleNewJob(req: VercelRequest, res: VercelResponse): Pro
   if (data.bin_types && (walkupBinTypes === null || walkupBinTypes.length !== data.bin_count)) {
     res.status(400).json({
       status: 'invalid',
-      errors: { bin_types: ['Pick which bins to clean — one entry per bin, no repeats.'] },
+      errors: { bin_types: ['Pick which bins to clean — one entry per bin.'] },
     });
     return;
   }
@@ -1336,7 +1339,9 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         photoAttachments.push({ ...pair.after, inline: true, contentId: binAfterPhotoCid(n) });
       }
       // Name it when the booking told us which bins; otherwise "Bin 2".
-      const label = binTypes && binTypes[n - 1] ? BIN_TYPE_SHORT[binTypes[n - 1] as BinType] ?? null : null;
+      // Numbered per repeated type, so a customer with two black bins reads
+      // "Black bin 2" rather than two sections both called "Black bin".
+      const label = binTypes ? binLabelsFor(binTypes, binCount)[n - 1] ?? null : null;
       return { hasBefore: !!pair.before, hasAfter: !!pair.after, label };
     });
     // PDF receipt whenever money changed hands (or was explicitly comped) on

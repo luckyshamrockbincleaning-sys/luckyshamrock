@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { LAUNCH_DATE_ISO } from './launch.js';
-import { normalizeBinTypes, BIN_TYPES } from './bin-types.js';
+import { normalizeBinTypes } from './bin-types.js';
 
 const emailField = z
   .string()
@@ -14,6 +14,9 @@ const cadence = z.enum(['monthly', 'bimonthly', 'quarterly', 'seasonal']);
 // DB enum + Cadence type for legacy subscriptions, but the public booking
 // endpoint must not let a crafted request create an unsold plan.
 const planField = z.enum(['oneoff', 'monthly', 'seasonal']);
+// Self-serve stops at 3. The operator's walk-up form is capped separately and
+// far higher — see lib/operator-handlers.ts.
+const MAX_SELF_SERVE_BINS = 3;
 const binCount = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const paymentSetup = z.object({
   stripe_customer_id: z.string().trim().min(1),
@@ -59,9 +62,10 @@ export const bookRequestSchema = z
     // Which bins to clean. Optional so a caller predating the field still
     // works, but when present it must agree with bin_count — bin_count is what
     // gets priced, so a request claiming one bin and two types would be two
-    // bins cleaned for the price of one. Bound follows the vocabulary, so
-    // adding or removing a bin type can't leave a stale number here.
-    bin_types: z.array(z.string()).max(BIN_TYPES.length).optional(),
+    // bins cleaned for the price of one. Bound follows the COUNT cap, not the
+    // vocabulary: now that a type can repeat, a legitimate 3-bin order may
+    // name the same type three times.
+    bin_types: z.array(z.string()).max(MAX_SELF_SERVE_BINS).optional(),
     bin_location: z.enum(['curb', 'side', 'garage', 'back']).optional(),
     plan: planField,
     oneoff_date: z.string().regex(DATE_ONLY_RE, 'oneoff_date must be YYYY-MM-DD').optional(),
@@ -88,11 +92,11 @@ export const bookRequestSchema = z
           path: ['bin_types'],
         });
       } else if (normalized.length !== data.bin_count) {
-        // Also catches a duplicate selection ({garbage,garbage} normalizes to
-        // one entry) — you cannot clean the same bin twice.
+        // bin_count is what gets priced, so a mismatch would clean more bins
+        // than were paid for. Rejected, never reconciled to the smaller number.
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'bin_types must list exactly bin_count distinct bins',
+          message: 'bin_types must list one entry per bin, matching bin_count',
           path: ['bin_types'],
         });
       }
