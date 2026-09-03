@@ -411,7 +411,9 @@ const Booking = ({ tweaks }) => {
     if (!RESUME) return;
     RESUME.save({
       service,
-      binTypes,
+      // Quantities, not the flattened list: binQty is the state that drives
+      // the steppers, and restoring the list alone could not rebuild it.
+      binQty,
       contact,
       referral,
       oneoffDate: selectedDay !== null && days[selectedDay] ? toIsoDay(days[selectedDay].date) : null,
@@ -431,7 +433,7 @@ const Booking = ({ tweaks }) => {
     if (!saved) return;
 
     if (saved.service) setService(saved.service);
-    if (saved.binTypes) setBinTypes(saved.binTypes);
+    if (saved.binQty) setBinQty(saved.binQty);
     if (saved.contact) setContact(saved.contact);
     if (saved.referral) setReferral(saved.referral);
     if (saved.oneoffDate) {
