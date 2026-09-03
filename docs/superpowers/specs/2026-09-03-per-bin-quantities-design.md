@@ -145,6 +145,27 @@ $45 + 7 × $12 = $129. The operator's existing amount override covers a job
 where linear pricing is wrong. `pricing.js` / `lib/pricing.ts` and their drift
 guard are untouched.
 
+### 7. /manage bin-count change — a latent 500 this work must fix
+
+`api/subscription/[id]/update.ts` writes `binCount` without touching
+`binTypes`. Once a subscription has `bin_types` set, any bin-count change from
+/manage violates `subscription_bin_types_match_count` and the customer gets a
+500.
+
+**Verified latent, not live, on 2026-09-03:** all four subscriptions (Aaron
+Cropper, Kalie Carey, Soleil Lee, and shea sommerfeld's cancelled one) have
+`bin_types = null` — every one predates the 2026-08-15 picker and no recurring
+plan has been sold since. The first recurring customer who books with bin types
+and later changes their count triggers it.
+
+This work makes that more likely rather than less, so the fix belongs here:
+/manage gains the same per-type steppers as the booking form (capped at 3, the
+self-serve limit) and sends `bin_types` alongside `bin_count`, with the server
+applying the same agreement rule it applies at booking. A count-only request
+from an older client keeps working: the server derives types by truncating or
+extending the stored list in canonical order, and writes `null` if it cannot
+produce an honest answer.
+
 ## Testing
 
 - `normalizeBinTypes`: duplicates preserved, stable canonical sort, mixed input
@@ -157,9 +178,11 @@ guard are untouched.
 - Done: accepts URLs, deletes the prefix after send, still accepts legacy
   inline photos, and completes when an upload failed mid-job.
 - Orphan sweep: deletes >48h, leaves today's alone.
+- /manage: changing bin count on a subscription WITH bin_types no longer 500s;
+  types and count still agree afterwards; a count-only legacy request works.
 - Existing `pricing-sync` and `bin-types-sync` drift guards must stay green.
 
-Current suite is 524; expect roughly 30 new.
+Current suite is 524; expect roughly 35 new.
 
 ## Risks
 
@@ -170,6 +193,7 @@ Current suite is 524; expect roughly 30 new.
 | Photo/bin position drift | Canonical sort + position-keyed tests |
 | Large job slows Done anyway | Done carries URLs only; GIF stays bin 1 |
 | Operator enters an absurd count | `max(10)` typo guard |
+| /manage count change breaks the constraint | Fixed here; regression test |
 
 ## Rollout
 
