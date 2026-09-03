@@ -333,6 +333,10 @@ const Booking = ({ tweaks }) => {
       return;
     }
     setPaymentState({ phase: 'saving' });
+    // Saved BEFORE confirmSetup, because confirmSetup is what navigates the
+    // page away when an issuer demands a full-page 3-D Secure challenge.
+    // After that call there is no "later" in which to save anything.
+    saveResume();
     try {
       const { error } = await stripeRef.current.confirmSetup({
         elements: elementsRef.current,
@@ -363,6 +367,89 @@ const Booking = ({ tweaks }) => {
       });
     }
   }, [paymentState.phase]);
+
+  // ===== Surviving a full-page redirect =====
+  // Everything the customer has typed lives in this component's state, and a
+  // full page load destroys it. Stripe performs exactly that navigation when a
+  // bank demands a full-page 3-D Secure challenge: the card gets saved and a
+  // Stripe customer is created, but /api/book is never called, so there is no
+  // booking. The customer came back to an empty form believing they had
+  // booked, and Shea never saw the job. See booking-resume.js.
+  const RESUME = (typeof window !== 'undefined' && window.LS_BOOKING_RESUME) || null;
+  const [resumeSubmit, setResumeSubmit] = useStateBk(false);
+
+  function toIsoDay(d) {
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  }
+
+  function saveResume() {
+    if (!RESUME) return;
+    RESUME.save({
+      service,
+      binTypes,
+      contact,
+      referral,
+      oneoffDate: selectedDay !== null && days[selectedDay] ? toIsoDay(days[selectedDay].date) : null,
+      paymentSetup: paymentSetupRef.current || null,
+    });
+  }
+
+  React.useEffect(() => {
+    if (!RESUME) return;
+    const pending = RESUME.pendingFromUrl(window.location.search);
+    if (!pending) return;
+    const saved = RESUME.load();
+    // Drop Stripe's params either way, so a refresh cannot replay this.
+    try {
+      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    } catch (e) {}
+    if (!saved) return;
+
+    if (saved.service) setService(saved.service);
+    if (saved.binTypes) setBinTypes(saved.binTypes);
+    if (saved.contact) setContact(saved.contact);
+    if (saved.referral) setReferral(saved.referral);
+    if (saved.oneoffDate) {
+      const i = days.findIndex((d) => toIsoDay(d.date) === saved.oneoffDate);
+      // A day that has since passed is gone; land them on the schedule step
+      // rather than silently booking a different date than they chose.
+      if (i !== -1) setSelectedDay(i);
+    }
+
+    if (pending.status === 'succeeded' && saved.paymentSetup) {
+      // The card is saved and the customer authorised it at their bank. The
+      // only missing piece is the booking, so finish it — asking them to press
+      // a button they never knew existed is how the job got lost before.
+      paymentSetupRef.current = saved.paymentSetup;
+      setPaymentState({ phase: 'saved' });
+      setStep(5);
+      setResumeSubmit(true);
+    } else {
+      // No card was saved, so nothing was booked — say so plainly rather than
+      // implying otherwise. The two cases are distinguished because telling
+      // someone their bank declined when it did not is its own small betrayal.
+      setStep(4);
+      setPaymentState({
+        phase: 'idle',
+        message:
+          pending.status === 'succeeded'
+            ? 'We lost track of that card — please add it again to finish your booking.'
+            : 'Your bank did not approve that card. Try again, or use a different card.',
+      });
+    }
+  }, []);
+
+  // Submitting is deliberately a SEPARATE effect: the restore above only
+  // queues its state updates, so calling submitBooking() there would read the
+  // empty pre-restore values out of its closure. By the time this runs, the
+  // restored state has been committed.
+  React.useEffect(() => {
+    if (!resumeSubmit) return;
+    setResumeSubmit(false);
+    submitBooking();
+  }, [resumeSubmit]);
 
   // ===== Submit to /api/book =====
   async function submitBooking() {
@@ -410,6 +497,7 @@ const Booking = ({ tweaks }) => {
       const data = await response.json().catch(() => ({}));
 
       if (response.status === 200 && data.status === 'ok') {
+        if (RESUME) RESUME.clear();
         setSubmitState({ phase: 'success', firstVisitDate: data.first_visit_date_long || data.first_visit_date });
         return;
       }
