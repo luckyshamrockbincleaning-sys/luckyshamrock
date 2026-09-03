@@ -22,6 +22,9 @@
   <!-- Single source of truth for display prices (mirrors lib/pricing.ts). Plain
        script so window.LS_PRICING is defined before the Babel components run. -->
   <script src="pricing.js"></script>
+  <!-- Keeps a half-finished booking alive across a full-page 3-D Secure
+       redirect. Must load before components-booking.jsx. -->
+  <script src="booking-resume.js"></script>
   <script type="text/babel" src="tweaks-panel.jsx"></script>
   <script type="text/babel" src="components-core.jsx"></script>
   <script type="text/babel" src="components-mid.jsx"></script>

@@ -99,15 +99,27 @@ export function magicLinkTemplate(p: { manageUrl: string }): RenderedEmail {
   return { subject, html, text };
 }
 
-export function onOurWayTemplate(p: { name: string }): RenderedEmail {
+/**
+ * `street` names the property we are on the way to. Without it the email says
+ * only "your garbage bin", so a shared household inbox cannot tell whose clean
+ * this is — and when an address is wrong on a record, a nameless email reads as
+ * entirely plausible to the stranger who receives it (2026-08-26: keltie
+ * Herzog's on-our-way went to Teri Lorenz and neither could tell). Optional
+ * because walk-up records predate a required address.
+ */
+export function onOurWayTemplate(p: { name: string; street?: string | null }): RenderedEmail {
   const subject = `We're on the way`;
-  const text =
-    `Hi ${p.name},\n\n` +
-    `Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.\n\n` +
-    FOOTER_TEXT;
+  const where = p.street && p.street.trim().length > 0 ? p.street.trim() : null;
+  const line = where
+    ? `Lucky Shamrock is heading to your garbage bin at ${where} now. We'll be in and out — no need to be home.`
+    : `Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.`;
+  const htmlLine = where
+    ? `Lucky Shamrock is heading to your garbage bin at <strong>${escapeHtml(where)}</strong> now. We'll be in and out — no need to be home.`
+    : `Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.`;
+  const text = `Hi ${p.name},\n\n` + line + `\n\n` + FOOTER_TEXT;
   const html = brandWrap(
     `<p>Hi ${escapeHtml(p.name)},</p>` +
-    `<p>Lucky Shamrock is heading to your garbage bin now. We'll be in and out — no need to be home.</p>`,
+    `<p>${htmlLine}</p>`,
   );
   return { subject, html, text };
 }

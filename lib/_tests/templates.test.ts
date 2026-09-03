@@ -304,3 +304,26 @@ describe('doneTemplate — extra charge', () => {
     expect(t.html).toContain('&lt;script&gt;');
   });
 });
+
+describe('onOurWayTemplate — which address we are coming to', () => {
+  // A shared household inbox gets "heading to your garbage bin" with no way to
+  // tell whose bin. Raised 2026-08-26 alongside the wrong-recipient incident,
+  // where an email genuinely reached the wrong person and read as plausible.
+  it('names the property in both text and html', () => {
+    const t = onOurWayTemplate({ name: 'Mia', street: '125 Richmond Link' });
+    expect(t.text).toContain('125 Richmond Link');
+    expect(t.html).toContain('125 Richmond Link');
+  });
+
+  it('still reads properly when no address is on file', () => {
+    const t = onOurWayTemplate({ name: 'Mia', street: null });
+    expect(t.text).toContain('Hi Mia');
+    expect(t.text).not.toContain('null');
+    expect(t.html).not.toContain('null');
+  });
+
+  it('escapes an address rather than letting it into the markup', () => {
+    const t = onOurWayTemplate({ name: 'Mia', street: '1 <script>alert(1)</script> Ave' });
+    expect(t.html).not.toContain('<script>');
+  });
+});
