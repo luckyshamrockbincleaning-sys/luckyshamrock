@@ -7,6 +7,7 @@ import { customer, subscription, visit } from '../../../db/schema.js';
 import { getSessionCustomerId } from '../../../lib/session.js';
 import { generateVisitDates, generateSeasonalDates, type Cadence } from '../../../lib/schedule.js';
 import { effectiveStartDate } from '../../../lib/launch.js';
+import { normalizeBinTypes, BIN_TYPES } from '../../../lib/bin-types.js';
 
 const updateSchema = z
   .object({
@@ -16,6 +17,9 @@ const updateSchema = z
     // switch into one from /manage.
     cadence: z.enum(['monthly', 'seasonal']).optional(),
     bin_count: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+    // Which bins, not just how many. Optional so an older /manage client that
+    // sends only a count keeps working — see the derivation below.
+    bin_types: z.array(z.string()).max(3).optional(),
   })
   .refine((d) => d.cadence !== undefined || d.bin_count !== undefined, {
     message: 'one of cadence or bin_count must be present',
@@ -76,10 +80,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const newCadence = (parsed.data.cadence ?? sub.cadence) as Cadence;
     const newBinCount = parsed.data.bin_count ?? sub.binCount;
 
+    // bin_types has to agree with bin_count or the CHECK constraint rejects
+    // the write outright — which is how a bin-count change on a subscription
+    // WITH types used to 500 (latent until 2026-09-03 only because every live
+    // subscription predated the bin picker).
+    let newBinTypes: string[] | null = sub.binTypes ?? null;
+    if (parsed.data.bin_types !== undefined) {
+      newBinTypes = normalizeBinTypes(parsed.data.bin_types);
+      if (newBinTypes === null || newBinTypes.length !== newBinCount) {
+        res.status(400).json({
+          status: 'invalid',
+          errors: { bin_types: ['Pick which bins to clean — one entry per bin.'] },
+        });
+        return;
+      }
+    } else if (newBinTypes !== null && newBinTypes.length !== newBinCount) {
+      // Count-only request from an older client. Truncate or extend in
+      // canonical order; a subscription that never had types keeps null rather
+      // than being handed a list nobody chose.
+      const grown =
+        newBinCount < newBinTypes.length
+          ? newBinTypes.slice(0, newBinCount)
+          : [...newBinTypes, ...Array(newBinCount - newBinTypes.length).fill(BIN_TYPES[0])];
+      newBinTypes = normalizeBinTypes(grown);
+    }
+
     await db.transaction(async (tx) => {
       await tx
         .update(subscription)
-        .set({ cadence: newCadence, binCount: newBinCount })
+        .set({ cadence: newCadence, binCount: newBinCount, binTypes: newBinTypes })
         .where(eq(subscription.id, subId));
 
       if (cadenceChanged) {
@@ -118,7 +147,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       }
     });
 
-    res.status(200).json({ status: 'ok', cadence: newCadence, bin_count: newBinCount });
+    res.status(200).json({ status: 'ok', cadence: newCadence, bin_count: newBinCount, bin_types: newBinTypes });
   } catch (err) {
     console.error('[subscription/update] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });

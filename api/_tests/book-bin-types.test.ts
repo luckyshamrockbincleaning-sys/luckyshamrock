@@ -113,8 +113,8 @@ describe('POST /api/book — which bins', () => {
     );
     expect(res.statusCode).toBe(200);
     const [sub] = await getDb().select().from(subscription);
-    expect(sub.binCount).toBe(2);
-    expect(sub.binTypes).toEqual(['garbage', 'garbage']);
+    expect(sub!.binCount).toBe(2);
+    expect(sub!.binTypes).toEqual(['garbage', 'garbage']);
   });
 
   it('still refuses a count larger than the bins listed', async () => {
