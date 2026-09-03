@@ -331,6 +331,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
             id: sub.id,
             cadence: sub.cadence,
             bin_count: sub.binCount,
+            // Needed by /manage's bin steppers. Without it the page would seed
+            // from the count alone and a save would overwrite the customer's
+            // real bins with a list they never chose.
+            bin_types: sub.binTypes ?? null,
             status: sub.status,
             started_on: sub.startedOn,
           }

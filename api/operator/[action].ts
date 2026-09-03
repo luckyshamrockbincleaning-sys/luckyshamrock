@@ -9,6 +9,7 @@ import {
   handleEditCustomer,
   handleAct,
   handleNewJob,
+  handlePhotoUpload,
 } from '../../lib/operator-handlers.js';
 
 /**
@@ -20,6 +21,7 @@ import {
  *   GET  /api/operator/attention ← done visits whose charge failed
  *   POST /api/operator/act      ← visit actions; body {id, op, text?} (op includes retry)
  *   POST /api/operator/job       ← walk-up: create customer + one-off visit
+ *   POST /api/operator/upload    ← one Done photo, stored as it is taken
  *
  * Why one segment: in the Vercel runtime a catch-all `[...path]` route 404'd at
  * the platform for any 2+/-segment URL (e.g. /visit/:id/:action) — the function
@@ -43,6 +45,7 @@ const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promi
   customer: handleEditCustomer,
   act: handleAct,
   job: handleNewJob,
+  upload: handlePhotoUpload,
 };
 
 function resolveAction(req: VercelRequest): string | null {

@@ -35,7 +35,9 @@ async function req(customerId: string | null, id: string | undefined, body?: unk
   return { method, headers, query: id !== undefined ? { id } : {}, body };
 }
 
-async function setup(): Promise<{ customerId: string; subId: string; oldFutureVisitId: string }> {
+async function setup(
+  opts: { binCount?: number; binTypes?: string[] | null } = {},
+): Promise<{ customerId: string; subId: string; oldFutureVisitId: string }> {
   const db = getDb();
   const customerId = crypto.randomUUID();
   await db.insert(customer).values({
@@ -49,7 +51,8 @@ async function setup(): Promise<{ customerId: string; subId: string; oldFutureVi
     id: subId,
     customerId,
     cadence: 'monthly',
-    binCount: 1,
+    binCount: opts.binCount ?? 1,
+    binTypes: opts.binTypes ?? null,
     startedOn: new Date('2026-01-01'),
   });
   const oldFutureVisitId = crypto.randomUUID();
@@ -155,5 +158,49 @@ describe('POST /api/subscription/:id/update', () => {
     const res = mockRes();
     await handler(await req(customerId, subId, { bin_count: 2 }), res);
     expect(res.statusCode).toBe(409);
+  });
+});
+
+describe('bin_types must keep step with bin_count', () => {
+  // Latent 500 found 2026-09-03: the route wrote bin_count and left bin_types
+  // alone, violating subscription_bin_types_match_count. It had never fired
+  // because every live subscription predates the bin picker and has no types.
+  it('changing the count on a subscription WITH types does not 500', async () => {
+    const { customerId, subId } = await setup({ binCount: 3, binTypes: ['garbage', 'garbage', 'organics'] });
+    const res = mockRes();
+    await handler(await req(customerId, subId, { bin_count: 2 }), res);
+    expect(res.statusCode).toBe(200);
+
+    const [sub] = await getDb().select().from(subscription).where(eq(subscription.id, subId));
+    expect(sub!.binCount).toBe(2);
+    expect(sub!.binTypes).toHaveLength(2);
+  });
+
+  it('honours an explicit list', async () => {
+    const { customerId, subId } = await setup({ binCount: 1, binTypes: ['garbage'] });
+    const res = mockRes();
+    await handler(await req(customerId, subId, { bin_count: 2, bin_types: ['organics', 'garbage'] }), res);
+    expect(res.statusCode).toBe(200);
+
+    const [sub] = await getDb().select().from(subscription).where(eq(subscription.id, subId));
+    expect(sub!.binTypes).toEqual(['garbage', 'organics']); // canonical order
+  });
+
+  it('refuses a list that disagrees with the count', async () => {
+    const { customerId, subId } = await setup({ binCount: 1, binTypes: ['garbage'] });
+    const res = mockRes();
+    await handler(await req(customerId, subId, { bin_count: 3, bin_types: ['garbage', 'organics'] }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('leaves a legacy subscription with no types alone', async () => {
+    const { customerId, subId } = await setup({ binCount: 2, binTypes: null });
+    const res = mockRes();
+    await handler(await req(customerId, subId, { bin_count: 3 }), res);
+    expect(res.statusCode).toBe(200);
+
+    const [sub] = await getDb().select().from(subscription).where(eq(subscription.id, subId));
+    expect(sub!.binCount).toBe(3);
+    expect(sub!.binTypes).toBeNull();
   });
 });

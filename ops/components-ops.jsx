@@ -136,6 +136,11 @@ const BIN_LOCATION_LABEL = {
 };
 
 const CLEAN_PHOTO_MAX_SIDE = 1600;
+// Above the self-serve cap a job can carry a lot of photos, and the customer
+// opens the email on mobile data. 1100 keeps even an eight-bin email under
+// ~3.5MB without dropping a single bin's proof.
+const CLEAN_PHOTO_MAX_SIDE_MANY = 1100;
+const MANY_BINS = 3;
 const CLEAN_PHOTO_QUALITY = 0.78;
 
 function readFileAsDataUrl(file) {
@@ -156,11 +161,12 @@ function loadImage(src) {
   });
 }
 
-async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
+async function prepareCleanPhoto(file, filename = 'clean-bin.jpg', binCount = 1) {
   if (!file) return null;
   const dataUrl = await readFileAsDataUrl(file);
   const img = await loadImage(dataUrl);
-  const scale = Math.min(1, CLEAN_PHOTO_MAX_SIDE / Math.max(img.width, img.height));
+  const maxSide = binCount > MANY_BINS ? CLEAN_PHOTO_MAX_SIDE_MANY : CLEAN_PHOTO_MAX_SIDE;
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
   const width = Math.max(1, Math.round(img.width * scale));
   const height = Math.max(1, Math.round(img.height * scale));
   const canvas = document.createElement('canvas');
@@ -186,6 +192,13 @@ async function prepareCleanPhoto(file, filename = 'clean-bin.jpg') {
 // cleared on Done and aged out after a day.
 const PHOTO_STORE_PREFIX = 'ls-ops-photos-';
 
+// A shot is present whether it is still bytes on this phone or already a url
+// in storage. Every "do we have this photo?" check must accept both, or an
+// uploaded photo reads as missing and Done stays disabled at the door.
+function hasShot(side) {
+  return !!(side && (side.photo || side.url));
+}
+
 function savedPhotos(visitId) {
   try {
     const raw = localStorage.getItem(PHOTO_STORE_PREFIX + visitId);
@@ -197,11 +210,14 @@ function savedPhotos(visitId) {
 }
 
 // One entry per bin: bins[i] = { before: {photo,filename}?, after: {photo,filename}? }.
-function persistBinPhoto(visitId, binIndex, kind, photo, filename) {
+function persistBinPhoto(visitId, binIndex, kind, photo, filename, url) {
   try {
     const cur = savedPhotos(visitId) || { ts: Date.now(), bins: [] };
     if (!Array.isArray(cur.bins)) cur.bins = [];
-    cur.bins[binIndex] = { ...cur.bins[binIndex], [kind]: { photo, filename } };
+    // Once a photo is uploaded we keep only its url. That is what stops this
+    // store blowing the ~5MB localStorage quota on a multi-bin job — base64
+    // is only held when the upload failed and Done has to send it inline.
+    cur.bins[binIndex] = { ...cur.bins[binIndex], [kind]: { photo: url ? null : photo, filename, url: url || null } };
     cur.ts = Date.now();
     localStorage.setItem(PHOTO_STORE_PREFIX + visitId, JSON.stringify(cur));
   } catch (e) { /* storage full/blocked — degrade silently */ }
@@ -228,8 +244,10 @@ purgeStalePhotoStores();
 // One photo capture step with a live thumbnail + captured/ missing state, so
 // the operator can SEE at a glance which shots are attached before tapping Done.
 function PhotoStep({ n, title, hint, state, onChange, busy }) {
-  const ready = state.phase === 'ready' && state.photo;
-  const thumb = ready ? `data:${state.photo.mime_type};base64,${state.photo.content_base64}` : null;
+  // Ready means we HAVE the shot — bytes on this phone, or a url in storage
+  // after a tab reload ate the bytes. Only the thumbnail needs the bytes.
+  const ready = state.phase === 'ready' && (state.photo || state.url);
+  const thumb = state.photo ? `data:${state.photo.mime_type};base64,${state.photo.content_base64}` : null;
   return (
     <div
       className="ops-photo"
@@ -275,7 +293,12 @@ function NewJobCard({ onCreated }) {
   // Field order matches how the conversation actually goes at a gate: who are
   // you, where, how do I reach you, how many bins, and an email if you'll give
   // one. No postal code — the operator is standing at the address.
-  const emptyForm = { name: '', street: '', phone: '', bin_types: ['garbage'], email: '', scheduled_for: '' };
+  // Quantities per type, not ticks: a duplex or a big household genuinely has
+  // two black bins, and this form is the one place that can record more bins
+  // than the website sells.
+  const emptyForm = { name: '', street: '', phone: '', bin_qty: { garbage: 1, organics: 0 }, email: '', scheduled_for: '' };
+  // 10 is a typo guard, not a policy limit — 99 would generate 198 photo steps.
+  const MAX_WALKUP_BINS = 10;
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
@@ -299,10 +322,15 @@ function NewJobCard({ onCreated }) {
     }
     setBusy(true);
     try {
+      const binTypes = BIN_TYPE_OPTIONS.flatMap(
+        (o) => Array(form.bin_qty[o.value] || 0).fill(o.value),
+      );
       const body = {
         street: form.street.trim(),
-        bin_count: form.bin_types.length,
-        bin_types: form.bin_types,
+        // bin_count is what gets priced; bin_types must agree with it or the
+        // server rejects the job rather than reconciling to the smaller number.
+        bin_count: binTypes.length,
+        bin_types: binTypes,
       };
       if (form.phone.trim()) body.phone = form.phone.trim();
       if (form.email.trim()) body.email = form.email.trim();
@@ -343,6 +371,12 @@ function NewJobCard({ onCreated }) {
   }
 
   const field = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  // 40px targets: this is tapped one-handed at a doorstep, and a mis-tap
+  // changes what the customer is charged.
+  const stepBtn = {
+    width: 40, height: 40, borderRadius: 10, border: '1px solid rgba(0,0,0,0.15)',
+    background: '#fff', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+  };
   const chip = (active) => ({
     padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
     border: active ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
@@ -356,37 +390,33 @@ function NewJobCard({ onCreated }) {
       <input style={field} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
       <input style={field} type="tel" inputMode="tel" placeholder="Phone number *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
         {BIN_TYPE_OPTIONS.map((opt) => {
-          const on = form.bin_types.includes(opt.value);
+          const n = form.bin_qty[opt.value] || 0;
+          const total = BIN_TYPE_OPTIONS.reduce((a, o) => a + (form.bin_qty[o.value] || 0), 0);
+          const step = (delta) => {
+            const next = n + delta;
+            if (next < 0) return;
+            const newTotal = total - n + next;
+            // Never zero bins — there'd be no job — and never past the guard.
+            if (newTotal < 1 || newTotal > MAX_WALKUP_BINS) return;
+            setForm({ ...form, bin_qty: { ...form.bin_qty, [opt.value]: next } });
+          };
           return (
-            <button
-              key={opt.value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setForm({
-                ...form,
-                // Never let the last bin be unticked — there'd be no job.
-                bin_types: on
-                  ? (form.bin_types.length > 1 ? form.bin_types.filter((v) => v !== opt.value) : form.bin_types)
-                  : [...BIN_TYPE_OPTIONS.map((o) => o.value)].filter(
-                      (v) => v === opt.value || form.bin_types.includes(v),
-                    ),
-              })}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
-                border: on ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
-                background: on ? 'var(--green-soft, #eef6ef)' : '#fff',
-                fontWeight: on ? 600 : 400,
-              }}
-            >
+            <div key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{
                 width: 14, height: 14, borderRadius: 4, background: opt.swatch,
                 border: '1px solid rgba(0,0,0,0.22)', flex: '0 0 auto',
               }} aria-hidden="true"/>
-              {opt.label}
-            </button>
+              <span style={{ flex: 1, fontSize: 13 }}>{opt.label}</span>
+              <button type="button" aria-label={`One fewer ${opt.label}`}
+                onClick={() => step(-1)} disabled={n === 0 || total <= 1}
+                style={stepBtn}>−</button>
+              <span aria-live="polite" style={{ minWidth: 16, textAlign: 'center', fontWeight: 700 }}>{n}</span>
+              <button type="button" aria-label={`One more ${opt.label}`}
+                onClick={() => step(+1)} disabled={total >= MAX_WALKUP_BINS}
+                style={stepBtn}>+</button>
+            </div>
           );
         })}
       </div>
@@ -527,11 +557,13 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
   // One before/after pair per bin. bin 0 is the "hero" pair — it's the one
   // the server turns into the wash-GIF animation; bins 1+ always ride along
   // as plain before/after photos (see lib/operator-handlers.ts).
-  const idlePhoto = () => ({ phase: 'idle', photo: null, filename: '', message: '' });
+  const idlePhoto = () => ({ phase: 'idle', photo: null, url: null, filename: '', message: '' });
   const [bins, setBins] = useState(() => {
     const saved = savedPhotos(stop.id);
     const restore = (entry) =>
-      entry ? { phase: 'ready', photo: entry.photo, filename: entry.filename, message: 'Photo restored.' } : idlePhoto();
+      entry
+        ? { phase: 'ready', photo: entry.photo || null, url: entry.url || null, filename: entry.filename, message: 'Photo restored.' }
+        : idlePhoto();
     return Array.from({ length: binCount }, (_, i) => ({
       before: restore(saved?.bins?.[i]?.before),
       after: restore(saved?.bins?.[i]?.after),
@@ -552,7 +584,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
 
   async function doneWithDiscount() {
     if (submitting) return; // guard the impatient double-tap
-    const missingAfter = bins.findIndex((b) => !b.after.photo);
+    const missingAfter = bins.findIndex((b) => !hasShot(b.after));
     if (missingAfter !== -1) {
       setBinPhoto(missingAfter, 'after', {
         ...bins[missingAfter].after,
@@ -564,7 +596,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     // No before photo means no wash animation (bin 1) or no proof shot (other
     // bins) in the customer's email — that is sometimes intentional, but
     // never let it happen silently.
-    if (bins.some((b) => !b.before.photo)) {
+    if (bins.some((b) => !hasShot(b.before))) {
       const proceed = window.confirm(
         binCount > 1
           ? "One or more bins is missing a BEFORE photo — the customer's email will show only that bin's after photo, and bin 1 loses the wash animation if it's the one missing.\n\nTap Cancel to add the missing photo(s), or OK to finish without them."
@@ -577,7 +609,13 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     const payload = {
       discount_cents,
       payment_method: payMethod,
-      photos: bins.map((b) => ({ before: b.before.photo || undefined, after: b.after.photo })),
+      // A url when the photo reached storage; the bytes when it did not.
+      photos: bins.map((b) => ({
+        before_url: b.before.url || undefined,
+        after_url: b.after.url || undefined,
+        before: b.before.url ? undefined : (b.before.photo || undefined),
+        after: b.after.url ? undefined : (b.after.photo || undefined),
+      })),
     };
     const amt = parseFloat(amountOverride);
     if (Number.isFinite(amt) && amt > 0) payload.amount_cents = Math.round(amt * 100);
@@ -613,9 +651,36 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
     setBinPhoto(binIndex, kind, { phase: 'loading', photo: null, filename: file.name, message: 'Preparing photo…' });
     try {
       const filename = kind === 'before' ? 'before-bin.jpg' : 'clean-bin.jpg';
-      const photo = await prepareCleanPhoto(file, filename);
-      persistBinPhoto(stop.id, binIndex, kind, photo, file.name);
-      setBinPhoto(binIndex, kind, { phase: 'ready', photo, filename: file.name, message: 'Photo ready.' });
+      const photo = await prepareCleanPhoto(file, filename, binCount);
+      // Held on the phone first, so a failed upload still leaves the photo
+      // recoverable rather than lost between the camera and the network.
+      persistBinPhoto(stop.id, binIndex, kind, photo, file.name, null);
+      setBinPhoto(binIndex, kind, { phase: 'loading', photo, url: null, filename: file.name, message: 'Saving photo…' });
+      try {
+        const r = await fetch('/api/operator/upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            visit_id: stop.id,
+            bin_index: binIndex,
+            kind,
+            mime_type: photo.mime_type,
+            content_base64: photo.content_base64,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.url) throw new Error('upload failed');
+        persistBinPhoto(stop.id, binIndex, kind, null, file.name, data.url);
+        // The bytes stay in memory for the thumbnail — the operator confirms
+        // the shot by looking at it. Only the localStorage copy drops them,
+        // which is where the quota pressure was.
+        setBinPhoto(binIndex, kind, { phase: 'ready', photo, url: data.url, filename: file.name, message: 'Photo saved.' });
+      } catch (uploadErr) {
+        // No signal in a back alley is an ordinary operating condition here.
+        // Keep the bytes and let Done send them inline, exactly as it did
+        // before uploads existed — the job must never be blocked by storage.
+        setBinPhoto(binIndex, kind, { phase: 'ready', photo, url: null, filename: file.name, message: 'Saved on this phone.' });
+      }
     } catch (err) {
       setBinPhoto(binIndex, kind, {
         phase: 'error',
@@ -815,7 +880,7 @@ function StopCard({ stop, onAction, onRefresh, busy, showDate }) {
         {!isDone && !isCancelled && (
           <button
             className="btn btn-go ops-btn"
-            disabled={busy || submitting || !payMethod || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !b.after.photo)}
+            disabled={busy || submitting || !payMethod || bins.some((b) => b.before.phase === 'loading' || b.after.phase === 'loading' || !hasShot(b.after))}
             onClick={doneWithDiscount}
             style={submitting ? { opacity: 0.85 } : undefined}
           >

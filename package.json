@@ -16,6 +16,7 @@
     "dev": "vercel dev"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "@vercel/functions": "^3.7.0",
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.36.0",

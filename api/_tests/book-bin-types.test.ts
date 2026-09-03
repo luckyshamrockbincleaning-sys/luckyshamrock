@@ -98,14 +98,31 @@ describe('POST /api/book — which bins', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(res.body.status).toBe('invalid');
-    expect(res.body.errors.bin_types?.[0]).toMatch(/exactly bin_count/i);
+    expect(res.body.errors.bin_types?.[0]).toMatch(/one entry per bin/i);
     expect(await getDb().select().from(subscription)).toHaveLength(0);
   });
 
-  it('refuses the same bin listed twice to inflate the count', async () => {
+  // Changed deliberately on 2026-09-03. The same bin listed twice used to be an
+  // inflation attempt because bin_types was a set; it is now a multiset, and
+  // two black bins is an ordinary order that pays for two bins.
+  it('accepts two of the same bin and charges for both', async () => {
     const res = mockRes();
     await handler(
       req({ ...base, plan: 'monthly', bin_count: 2, bin_types: ['garbage', 'garbage'] }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const [sub] = await getDb().select().from(subscription);
+    expect(sub!.binCount).toBe(2);
+    expect(sub!.binTypes).toEqual(['garbage', 'garbage']);
+  });
+
+  it('still refuses a count larger than the bins listed', async () => {
+    // The real inflation vector: claim three bins, name two, pay for one more
+    // clean than you asked for — or get three cleaned having named two.
+    const res = mockRes();
+    await handler(
+      req({ ...base, plan: 'monthly', bin_count: 3, bin_types: ['garbage', 'garbage'] }),
       res,
     );
     expect(res.statusCode).toBe(400);

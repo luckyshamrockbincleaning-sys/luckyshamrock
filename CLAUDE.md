@@ -452,6 +452,27 @@ than a re-entered card) and again at final confirmation. Rules that matter:
   4–5★ to Google and are the strongest growth lever in that email; a test in
   `lib/_tests/templates.test.ts` asserts the ordering.
 
+## Bins and Done photos (2026-09-03)
+
+- **`bin_types` is a MULTISET**, canonically sorted: `['garbage','garbage','organics']`
+  is two black bins and a green one. `bin_count` stays the source of truth for
+  money and photo pairing; the `array_length(bin_types,1) = bin_count` CHECK
+  constraints are the whole invariant. A request whose types and count disagree
+  is **rejected, never reconciled**.
+- **Caps split by caller:** self-serve 3 (`lib/validation.ts`), walk-up 10
+  (`lib/operator-handlers.ts`). The 10 is a typo guard, not a policy limit.
+- **Photos upload as they are taken** to the `upload` op (an op on
+  `api/operator/[action].ts`, NOT a new file — the deploy is at 12/12). Done
+  carries urls. Photos are **deleted once the done email sends**; orphans are
+  swept after 48h on the next `/today`. Nothing is retained.
+- **Never remove the inline `before_photo`/`clean_photo` path** — it is the
+  no-signal fallback, and Done must never fail at a door.
+- **Any url taken from a request body and fetched server-side must go through
+  `isOwnVisitPhotoUrl`.** The fetched bytes end up in a customer's email, so an
+  unchecked url is SSRF with an exfiltration path.
+- A photo is present if it has **bytes OR a url** (`hasShot` in
+  `ops/components-ops.jsx`). Checking `.photo` alone disables Done after upload.
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.
