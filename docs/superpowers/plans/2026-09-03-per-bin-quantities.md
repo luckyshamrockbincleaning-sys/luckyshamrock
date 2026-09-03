@@ -10,6 +10,27 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-03-per-bin-quantities-design.md`
 
+## Progress (2026-09-03)
+
+| Task | State |
+|---|---|
+| 1 — multiset | ✅ done (`629cd97`) |
+| 2 — caps split by caller | ✅ done (`629cd97`) |
+| 3 — /manage 500 | ✅ done (`2103741`), 500 reproduced first |
+| 4 — upload op + photo store | ⛔ blocked: needs a Vercel Blob store + `BLOB_READ_WRITE_TOKEN` |
+| 5 — Done takes urls | ⛔ blocked on task 4 (per-repeat email labels already shipped in `629cd97`) |
+| 6 — orphan sweep | ⛔ blocked on task 4 |
+| 7 — /ops steppers + upload | 🟡 steppers done (`f45e071`); upload-as-taken blocked on task 4 |
+| 8 — booking + /manage steppers | ✅ done (`c31967d`) |
+| 9 — review, deploy, verify | ⛔ not started; deploy is a separate approval |
+
+**539 tests green, typecheck clean, all JSX parse-checked.** Nothing merged to
+`main`, nothing deployed.
+
+⚠️ **Merge note:** branch `booking-3ds-resume` restores `binTypes` via
+`setBinTypes(saved.binTypes)`, which this branch replaced with `binQty`. Whichever
+merges second must map the saved list back into quantities.
+
 ## Global Constraints
 
 - **Vercel Hobby is at 12/12 functions.** No new file under `api/`. New routes are ops on `api/operator/[action].ts`.
