@@ -50,6 +50,7 @@ import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
 import { isInSeason, seasonEnd } from './season.js';
 import { normalizeBinTypes, describeBins, binLabelsFor } from './bin-types.js';
+import { putVisitPhoto, deleteVisitPhotos, sweepStalePhotos, fetchVisitPhoto } from './photo-store.js';
 import { generateVisitDates, type PickupDay } from './schedule.js';
 import QRCode from 'qrcode';
 
@@ -248,6 +249,8 @@ interface PhotoPair {
 }
 
 const MAX_PHOTO_PAIRS = 10; // matches the walk-up bin_count ceiling
+// Long enough that a job interrupted overnight still finds its photos.
+const PHOTO_SWEEP_AGE_MS = 48 * 60 * 60 * 1000;
 
 /**
  * A visit's Done photos, one pair per bin. Preferred shape is
@@ -257,16 +260,48 @@ const MAX_PHOTO_PAIRS = 10; // matches the walk-up bin_count ceiling
  * always wins — a caller sending both is almost certainly a bug, not an
  * intentional mix.
  */
-function parsePhotoPairs(body: any): { ok: true; pairs: PhotoPair[] } | { ok: false; message: string } {
+/**
+ * One side of one bin's pair. A `*_url` means the photo was uploaded when it
+ * was taken and lives in Blob; the inline form is the no-signal fallback that
+ * predates uploads and must keep working.
+ */
+async function resolvePhotoEntry(
+  entry: any,
+  kind: 'before' | 'after',
+  label: string,
+): Promise<{ ok: true; attachment: EmailAttachment | null } | { ok: false; message: string }> {
+  const url = entry?.[`${kind}_url`];
+  if (typeof url === 'string' && url.length > 0) {
+    try {
+      const content = await fetchVisitPhoto(url);
+      return {
+        ok: true,
+        attachment: {
+          filename: kind === 'before' ? 'before-bin.jpg' : 'clean-bin.jpg',
+          contentType: 'image/jpeg',
+          contentBase64: content.toString('base64'),
+        },
+      };
+    } catch (err) {
+      // The clean genuinely happened. A photo we cannot fetch back costs the
+      // customer an image, never the job — Done must not fail at a door.
+      console.error(`[operator/visit/done] ${label} fetch failed`, err);
+      return { ok: true, attachment: null };
+    }
+  }
+  return parsePhotoAttachment(entry?.[kind], label);
+}
+
+async function parsePhotoPairs(body: any): Promise<{ ok: true; pairs: PhotoPair[] } | { ok: false; message: string }> {
   if (Array.isArray(body?.photos)) {
     if (body.photos.length === 0) return { ok: false, message: 'photos must not be empty' };
     if (body.photos.length > MAX_PHOTO_PAIRS) return { ok: false, message: `photos supports at most ${MAX_PHOTO_PAIRS} bins` };
     const pairs: PhotoPair[] = [];
     for (let i = 0; i < body.photos.length; i++) {
       const entry = body.photos[i];
-      const before = parsePhotoAttachment(entry?.before, `photos[${i}].before`);
+      const before = await resolvePhotoEntry(entry, 'before', `photos[${i}].before`);
       if (!before.ok) return before;
-      const after = parsePhotoAttachment(entry?.after, `photos[${i}].after`);
+      const after = await resolvePhotoEntry(entry, 'after', `photos[${i}].after`);
       if (!after.ok) return after;
       pairs.push({ before: before.attachment, after: after.attachment });
     }
@@ -277,6 +312,52 @@ function parsePhotoPairs(body: any): { ok: true; pairs: PhotoPair[] } | { ok: fa
   const beforePhoto = parsePhotoAttachment(body?.before_photo, 'before_photo');
   if (!beforePhoto.ok) return beforePhoto;
   return { ok: true, pairs: [{ before: beforePhoto.attachment, after: cleanPhoto.attachment }] };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/operator/upload — one photo, stored the moment it is taken
+//
+// An op on the existing single-segment router, NOT a new file: the deploy is
+// at 12/12 functions on Hobby. One photo per request is ~500KB against a 4.5MB
+// body limit, which is only a problem when Done batches every photo into one
+// request — which is exactly what this exists to stop.
+// ─────────────────────────────────────────────────────────────────────
+const uploadSchema = z.object({
+  visit_id: z.string().uuid(),
+  bin_index: z.number().int().min(0).max(9),
+  kind: z.enum(['before', 'after']),
+  mime_type: z.string().regex(/^image\/(jpeg|png|webp)$/),
+  content_base64: z.string().min(1),
+});
+
+export async function handlePhotoUpload(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const parsed = uploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const body = Buffer.from(parsed.data.content_base64, 'base64');
+  if (body.byteLength > MAX_CLEAN_PHOTO_BYTES) {
+    res.status(400).json({ status: 'invalid', message: 'Photo is too large.' });
+    return;
+  }
+  try {
+    const url = await putVisitPhoto(parsed.data.visit_id, parsed.data.bin_index, parsed.data.kind, body);
+    res.status(200).json({ status: 'ok', url });
+  } catch (err) {
+    // Recoverable: /ops keeps the bytes and Done sends them inline, exactly as
+    // it did before uploads existed. Never fail the job over storage.
+    console.error('[operator/upload] blob put failed', err);
+    res.status(502).json({ status: 'upload_failed', message: 'Could not store the photo.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -354,6 +435,15 @@ export async function handleToday(req: VercelRequest, res: VercelResponse): Prom
       return { ...dto, overdue: dto.scheduled_for < targetISO };
     });
     res.status(200).json({ status: 'ok', date: targetISO, visits });
+
+    // Photos uploaded for a Done that never happened — the operator was
+    // interrupted, or the job was skipped after the shots were taken. Swept
+    // after the response so the route never waits on it, and folded into an
+    // existing request because this project has no cron and cannot spare one
+    // of its twelve functions for one.
+    void sweepStalePhotos(PHOTO_SWEEP_AGE_MS).catch((err) =>
+      console.error('[operator/today] photo sweep failed', err),
+    );
   } catch (err) {
     console.error('[operator/today] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
@@ -933,7 +1023,7 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
   const surchargeCents = paymentParsed.data.surcharge_cents ?? 0;
   const surchargeReason = surchargeCents > 0 ? (paymentParsed.data.surcharge_reason ?? null) : null;
   const paymentMethod = paymentParsed.data.payment_method;
-  const photoPairs = parsePhotoPairs(req.body);
+  const photoPairs = await parsePhotoPairs(req.body);
   if (!photoPairs.ok) {
     res.status(400).json({ status: 'invalid', message: photoPairs.message });
     return;
@@ -1433,6 +1523,14 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
       visitId,
       attachments: photoAttachments.length ? photoAttachments : undefined,
     });
+
+    // Photos exist only to be delivered, and the email has now taken them.
+    // This system has never retained customer photos and this feature does not
+    // change that. Fire-and-forget: a cleanup failure must not fail a finished
+    // job, and the 48h sweep on /today catches anything left behind.
+    void deleteVisitPhotos(visitId).catch((err) =>
+      console.error('[operator/visit/done] photo cleanup failed (swept later)', err),
+    );
 
     res.status(200).json({
       status: 'ok',
