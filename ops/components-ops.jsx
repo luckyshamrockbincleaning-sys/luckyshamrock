@@ -275,7 +275,12 @@ function NewJobCard({ onCreated }) {
   // Field order matches how the conversation actually goes at a gate: who are
   // you, where, how do I reach you, how many bins, and an email if you'll give
   // one. No postal code — the operator is standing at the address.
-  const emptyForm = { name: '', street: '', phone: '', bin_types: ['garbage'], email: '', scheduled_for: '' };
+  // Quantities per type, not ticks: a duplex or a big household genuinely has
+  // two black bins, and this form is the one place that can record more bins
+  // than the website sells.
+  const emptyForm = { name: '', street: '', phone: '', bin_qty: { garbage: 1, organics: 0 }, email: '', scheduled_for: '' };
+  // 10 is a typo guard, not a policy limit — 99 would generate 198 photo steps.
+  const MAX_WALKUP_BINS = 10;
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
@@ -299,10 +304,15 @@ function NewJobCard({ onCreated }) {
     }
     setBusy(true);
     try {
+      const binTypes = BIN_TYPE_OPTIONS.flatMap(
+        (o) => Array(form.bin_qty[o.value] || 0).fill(o.value),
+      );
       const body = {
         street: form.street.trim(),
-        bin_count: form.bin_types.length,
-        bin_types: form.bin_types,
+        // bin_count is what gets priced; bin_types must agree with it or the
+        // server rejects the job rather than reconciling to the smaller number.
+        bin_count: binTypes.length,
+        bin_types: binTypes,
       };
       if (form.phone.trim()) body.phone = form.phone.trim();
       if (form.email.trim()) body.email = form.email.trim();
@@ -343,6 +353,12 @@ function NewJobCard({ onCreated }) {
   }
 
   const field = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, marginBottom: 8 };
+  // 40px targets: this is tapped one-handed at a doorstep, and a mis-tap
+  // changes what the customer is charged.
+  const stepBtn = {
+    width: 40, height: 40, borderRadius: 10, border: '1px solid rgba(0,0,0,0.15)',
+    background: '#fff', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+  };
   const chip = (active) => ({
     padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
     border: active ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
@@ -356,37 +372,33 @@ function NewJobCard({ onCreated }) {
       <input style={field} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       <input style={field} placeholder="Street address *" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
       <input style={field} type="tel" inputMode="tel" placeholder="Phone number *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
         {BIN_TYPE_OPTIONS.map((opt) => {
-          const on = form.bin_types.includes(opt.value);
+          const n = form.bin_qty[opt.value] || 0;
+          const total = BIN_TYPE_OPTIONS.reduce((a, o) => a + (form.bin_qty[o.value] || 0), 0);
+          const step = (delta) => {
+            const next = n + delta;
+            if (next < 0) return;
+            const newTotal = total - n + next;
+            // Never zero bins — there'd be no job — and never past the guard.
+            if (newTotal < 1 || newTotal > MAX_WALKUP_BINS) return;
+            setForm({ ...form, bin_qty: { ...form.bin_qty, [opt.value]: next } });
+          };
           return (
-            <button
-              key={opt.value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setForm({
-                ...form,
-                // Never let the last bin be unticked — there'd be no job.
-                bin_types: on
-                  ? (form.bin_types.length > 1 ? form.bin_types.filter((v) => v !== opt.value) : form.bin_types)
-                  : [...BIN_TYPE_OPTIONS.map((o) => o.value)].filter(
-                      (v) => v === opt.value || form.bin_types.includes(v),
-                    ),
-              })}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                padding: '7px 10px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
-                border: on ? '2px solid #1f7a1f' : '1px solid rgba(0,0,0,0.15)',
-                background: on ? 'var(--green-soft, #eef6ef)' : '#fff',
-                fontWeight: on ? 600 : 400,
-              }}
-            >
+            <div key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{
                 width: 14, height: 14, borderRadius: 4, background: opt.swatch,
                 border: '1px solid rgba(0,0,0,0.22)', flex: '0 0 auto',
               }} aria-hidden="true"/>
-              {opt.label}
-            </button>
+              <span style={{ flex: 1, fontSize: 13 }}>{opt.label}</span>
+              <button type="button" aria-label={`One fewer ${opt.label}`}
+                onClick={() => step(-1)} disabled={n === 0 || total <= 1}
+                style={stepBtn}>−</button>
+              <span aria-live="polite" style={{ minWidth: 16, textAlign: 'center', fontWeight: 700 }}>{n}</span>
+              <button type="button" aria-label={`One more ${opt.label}`}
+                onClick={() => step(+1)} disabled={total >= MAX_WALKUP_BINS}
+                style={stepBtn}>+</button>
+            </div>
           );
         })}
       </div>
