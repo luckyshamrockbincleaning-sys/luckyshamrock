@@ -960,6 +960,34 @@ const HISTORY_STATUS_STYLE = {
 
 function HistoryCard({ item, onRefresh }) {
   const [editing, setEditing] = useState(false);
+  const [receipt, setReceipt] = useState({ phase: 'idle', message: '' });
+
+  // A walk-up taken without an email gets no done email — correctly, there is
+  // nowhere to send one. When the address turns up later and the customer asks
+  // for a receipt, this is the screen the operator is already on.
+  async function sendReceipt() {
+    if (receipt.phase === 'sending') return;
+    setReceipt({ phase: 'sending', message: '' });
+    try {
+      const r = await fetch('/api/operator/act', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: item.id, op: 'resend_receipt' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || j.status || `${r.status}`);
+      setReceipt({
+        phase: 'done',
+        message: j.skipped ? 'A receipt has already been sent for this job.' : `Receipt sent to ${j.to}.`,
+      });
+    } catch (e) {
+      setReceipt({ phase: 'error', message: e.message });
+    }
+  }
+
+  // Only a finished, settled job HAS a receipt, and only a real address can
+  // receive one. Showing the button otherwise just invites a refusal.
+  const canReceipt = item.status === 'done' && !!item.email && item.amount_cents != null;
   const st = HISTORY_STATUS_STYLE[item.status] || HISTORY_STATUS_STYLE.done;
   const pay = PAY_BADGE[item.payment_status];
   const bins = item.bin_count ? `${item.bin_count} bin${item.bin_count > 1 ? 's' : ''}` : null;
@@ -998,7 +1026,20 @@ function HistoryCard({ item, onRefresh }) {
         <button className="btn btn-ghost ops-btn" onClick={() => setEditing(!editing)}>
           {editing ? 'Close' : 'Edit details'}
         </button>
+        {canReceipt && (
+          <button className="btn btn-ghost ops-btn" onClick={sendReceipt} disabled={receipt.phase === 'sending'}>
+            {receipt.phase === 'sending' ? 'Sending…' : 'Send receipt'}
+          </button>
+        )}
       </div>
+      {receipt.message && (
+        <div
+          className="ops-notes"
+          style={{ color: receipt.phase === 'error' ? '#7A2222' : '#1f7a1f' }}
+        >
+          {receipt.message}
+        </div>
+      )}
       {editing && (
         <EditCustomerCard
           stop={item}

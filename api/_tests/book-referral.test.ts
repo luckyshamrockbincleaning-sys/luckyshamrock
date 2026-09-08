@@ -6,6 +6,35 @@ import { customer } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { REFERRAL_CODE_LENGTH, REFERRAL_REWARD_CENTS } from '../../lib/referral.js';
 
+
+/**
+ * Hardcoded booking dates rot: 2026-09-03 was comfortably in the future when
+ * this was written and is now the past, so /api/book refused it and the test
+ * failed for a reason that had nothing to do with referrals. Computed instead,
+ * skipping Sundays and staying inside the May-Oct season — both of which the
+ * endpoint rejects. Same treatment as api/_tests/me.test.ts.
+ */
+function edmontonTodayISO(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Edmonton', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+function isoPlusDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function futureInSeasonISO(minDays: number): string {
+  let iso = isoPlusDays(edmontonTodayISO(), minDays);
+  for (let i = 0; i < 400; i++) {
+    const month = Number(iso.slice(5, 7));
+    const isSunday = new Date(`${iso}T12:00:00Z`).getUTCDay() === 0;
+    if (month >= 5 && month <= 10 && !isSunday) return iso;
+    iso = isoPlusDays(iso, 1);
+  }
+  throw new Error('no bookable date found');
+}
+
 beforeAll(() => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
 });
@@ -131,7 +160,7 @@ describe('booking with a referral code', () => {
     const res = mockRes();
     // Same email re-books (existing-customer path) quoting their own code.
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: futureInSeasonISO(10),
               name: 'Richelle Regehr', email: 'self@example.com', referral_code: referrer.code } } as any, res);
 
     const [c] = await getDb().select().from(customer).where(eq(customer.id, referrer.id));
@@ -148,7 +177,7 @@ describe('a returning customer can still be referred', () => {
     // subscription blocks them from booking again.
     const first = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-09-03',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: futureInSeasonISO(3),
               name: 'Returning Pat', email: 'returning@example.com' } } as any, first);
     expect(first.statusCode).toBe(200);
     const [before] = await getDb().select().from(customer).where(eq(customer.email, 'returning@example.com'));
@@ -157,7 +186,7 @@ describe('a returning customer can still be referred', () => {
     // They come back for another clean, this time quoting a neighbour's code.
     const second = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: futureInSeasonISO(10),
               name: 'Returning Pat', email: 'returning@example.com', referral_code: referrer.code } } as any, second);
     expect(second.statusCode).toBe(200);
 
@@ -176,7 +205,7 @@ describe('a returning customer can still be referred', () => {
 
     const second = mockRes();
     await handler({ method: 'POST', headers: {}, query: {},
-      body: { ...validBooking, plan: 'oneoff', oneoff_date: '2026-10-02',
+      body: { ...validBooking, plan: 'oneoff', oneoff_date: futureInSeasonISO(10),
               email: 'twice@example.com', referral_code: refB.code } } as any, second);
 
     const [c] = await getDb().select().from(customer).where(eq(customer.email, 'twice@example.com'));
