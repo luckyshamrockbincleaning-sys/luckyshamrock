@@ -27,6 +27,7 @@ import {
   onOurWayTemplate,
   doneTemplate,
   bookingConfirmedTemplate,
+  receiptTemplate,
   referralEarnedTemplate,
   seasonStartTemplate,
   DONE_BEFORE_PHOTO_CID,
@@ -65,7 +66,7 @@ const CLEAN_PHOTO_MIME_TO_EXT: Record<string, string> = {
 const loginSchema = z.object({ password: z.string().min(1) });
 const noteSchema = z.object({ text: z.string().trim().min(1).max(1000) });
 const actSchema = z
-  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note', 'retry', 'settle']) })
+  .object({ id: z.string().min(1), op: z.enum(['notify', 'done', 'skip', 'note', 'retry', 'settle', 'resend_receipt']) })
   .passthrough(); // keep `text` through for the note op
 const cleanPhotoSchema = z.object({
   filename: z.string().trim().min(1).max(160).optional(),
@@ -1455,7 +1456,10 @@ export async function handleDone(req: VercelRequest, res: VercelResponse): Promi
         const pdf = await generateReceiptPdf({
           receiptNumber: `LS-${visitId.slice(0, 6).toUpperCase()}`,
           serviceDate: formatFriendlyDate(row.scheduledFor.toISOString().slice(0, 10)),
-          paidDate: formatFriendlyDate(new Date().toISOString().slice(0, 10)),
+          // Edmonton's day, not UTC's. A bin cleaned at 7:52pm on a Sunday is
+          // already Monday in UTC, and a receipt dated the day after the
+          // customer paid is the kind of small wrongness that gets queried.
+          paidDate: formatFriendlyDate(operatorTodayISO()),
           customerName: row.name,
           address: [row.street, [row.city, row.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', '),
           planLabel,
@@ -1969,6 +1973,169 @@ export async function handleSettle(req: VercelRequest, res: VercelResponse): Pro
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// {op:'resend_receipt'} — send the receipt for a finished, settled job
+//
+// A walk-up taken without an email gets no done email, correctly: there is
+// nowhere to send it. When the address arrives later — the customer rings up
+// and asks for a receipt — nothing re-sent it, and only someone with database
+// access could put that right. Gordon Suprovich, 2026-09-08. Same reasoning as
+// the "Already paid? Record it" control: if the operator can hit the problem,
+// the operator needs the button.
+//
+// Rebuilt from the visit and its payment row rather than replaying the charge,
+// because those rows ARE the record of what happened. Photos are deliberately
+// absent — they are deleted once a done email sends, so a resend is the
+// receipt alone.
+// ─────────────────────────────────────────────────────────────────────
+export async function handleResendReceipt(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  const visitId = String(req.query.id ?? '');
+
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        status: visit.status,
+        scheduledFor: visit.scheduledFor,
+        binCount: visit.binCount,
+        subscriptionId: visit.subscriptionId,
+        customerId: visit.customerId,
+        email: customer.email,
+        name: customer.name,
+        street: customer.street,
+        city: customer.city,
+        postalCode: customer.postalCode,
+      })
+      .from(visit)
+      .innerJoin(customer, eq(visit.customerId, customer.id))
+      .where(eq(visit.id, visitId));
+
+    if (!row) {
+      res.status(404).json({ status: 'not_found' });
+      return;
+    }
+    if (row.status !== 'done') {
+      res.status(409).json({ status: 'not_done', message: 'Only a finished job has a receipt.' });
+      return;
+    }
+    if (isPlaceholderEmail(row.email)) {
+      res.status(409).json({
+        status: 'no_email',
+        message: 'No email on file — add one with Edit details first.',
+      });
+      return;
+    }
+
+    const [paid] = await db
+      .select({ amountCents: payment.amountCents, method: payment.method, createdAt: payment.createdAt })
+      .from(payment)
+      .where(and(eq(payment.visitId, visitId), eq(payment.status, 'succeeded')));
+    if (!paid) {
+      res.status(409).json({
+        status: 'not_settled',
+        message: 'Nothing is recorded as paid for this job yet.',
+      });
+      return;
+    }
+
+    const cadence = row.subscriptionId === null ? null : (await subscriptionCadence(db, row.subscriptionId));
+    const planLabel =
+      cadence === null
+        ? 'One-Time Clean'
+        : cadence === 'monthly'
+          ? 'Monthly Plan'
+          : cadence === 'seasonal'
+            ? 'Three Wash Season'
+            : cadence === 'bimonthly'
+              ? 'Bimonthly Plan'
+              : 'Quarterly Plan';
+
+    const attachments: EmailAttachment[] = [];
+    try {
+      const pdf = await generateReceiptPdf({
+        receiptNumber: `LS-${visitId.slice(0, 6).toUpperCase()}`,
+        serviceDate: formatFriendlyDate(row.scheduledFor.toISOString().slice(0, 10)),
+        // The day the money was actually recorded, in Edmonton's calendar —
+        // not today, and not UTC's idea of either.
+        paidDate: formatFriendlyDate(edmontonDayOf(paid.createdAt)),
+        customerName: row.name,
+        address: [row.street, [row.city, row.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+        planLabel,
+        binCount: row.binCount ?? 1,
+        baseCents: paid.amountCents,
+        discountCents: 0,
+        totalCents: paid.amountCents,
+        outcome:
+          paid.method === 'cash'
+            ? 'cash'
+            : paid.method === 'terminal'
+              ? 'terminal'
+              : paid.method === 'etransfer'
+                ? 'etransfer'
+                : 'charged',
+      });
+      attachments.push({
+        filename: 'LuckyShamrock-Receipt.pdf',
+        contentType: 'application/pdf',
+        contentBase64: pdf.toString('base64'),
+      });
+    } catch (err) {
+      // Without the PDF there is no receipt to send, so this one DOES fail —
+      // unlike the done email, where the receipt is a bonus on top of photos.
+      console.error('[operator/resend_receipt] receipt pdf failed', err);
+      res.status(500).json({ status: 'error', message: 'Could not build the receipt.' });
+      return;
+    }
+
+    const tpl = receiptTemplate({
+      name: row.name,
+      amountCents: paid.amountCents,
+      serviceDate: formatFriendlyDate(row.scheduledFor.toISOString().slice(0, 10)),
+    });
+    const result = await sendAndLog({
+      kind: 'receipt',
+      to: row.email,
+      subject: tpl.subject,
+      body: tpl.text,
+      html: tpl.html,
+      customerId: row.customerId,
+      visitId,
+      attachments,
+    });
+
+    res.status(200).json({ status: 'ok', skipped: result.skipped ?? false, to: row.email });
+  } catch (err) {
+    console.error('[operator/resend_receipt] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+async function subscriptionCadence(db: ReturnType<typeof getDb>, subId: string): Promise<Cadence | null> {
+  const [sub] = await db
+    .select({ cadence: subscription.cadence })
+    .from(subscription)
+    .where(eq(subscription.id, subId));
+  return (sub?.cadence as Cadence) ?? null;
+}
+
+/** The Edmonton calendar day an instant fell on. */
+function edmontonDayOf(at: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Edmonton',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(at);
+}
+
 const ACT_HANDLERS: Record<string, (req: VercelRequest, res: VercelResponse) => Promise<void>> = {
   notify: handleNotify,
   done: handleDone,
@@ -1976,6 +2143,7 @@ const ACT_HANDLERS: Record<string, (req: VercelRequest, res: VercelResponse) => 
   note: handleNote,
   retry: handleRetry,
   settle: handleSettle,
+  resend_receipt: handleResendReceipt,
 };
 
 export async function handleAct(req: VercelRequest, res: VercelResponse): Promise<void> {
