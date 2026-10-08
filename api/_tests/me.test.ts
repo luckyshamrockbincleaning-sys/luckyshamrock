@@ -3,7 +3,7 @@ import handler from '../me.js';
 import { mockReq } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
-import { customer, subscription, visit, payment } from '../../db/schema.js';
+import { customer, subscription, visit, payment, season } from '../../db/schema.js';
 import { signSessionCookie, SESSION_COOKIE_NAME } from '../../lib/cookies.js';
 import { eq } from 'drizzle-orm';
 
@@ -422,7 +422,8 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
     const v = await seedVisit(id, '2026-08-13');
 
     const res = mockResWithHeaders();
-    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-12-03' }), res);
+    // Far-future December: always out of season, never in the past.
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2099-12-03' }), res);
 
     expect(res.statusCode).toBe(422);
     expect(res.body.status).toBe('out_of_season');
@@ -441,10 +442,24 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
   it('refuses a Sunday, matching the booking rules', async () => {
     const id = await makeCustomer();
     const v = await seedVisit(id, '2026-09-10');
-    // 2026-09-13 is a Sunday.
+    // A future Sunday — a past one would be refused for being past instead.
+    let sunday = isoPlusDays(edmontonTodayISO(), 1);
+    while (new Date(`${sunday}T12:00:00Z`).getUTCDay() !== 0) sunday = isoPlusDays(sunday, 1);
     const res = mockResWithHeaders();
-    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-09-13' }), res);
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: sunday }), res);
     expect(res.statusCode).toBe(400);
+    expect(res.body.message).toMatch(/Sunday/);
+  });
+
+  it('refuses a date after the operator closed the season early', async () => {
+    const id = await makeCustomer();
+    const v = await seedVisit(id, '2026-09-10');
+    await getDb().insert(season).values({ year: 2099, startsOn: '2099-05-01', endsOn: '2099-10-16' });
+    const res = mockResWithHeaders();
+    // 2099-10-20 is a Tuesday: in the default season, outside the operator's.
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2099-10-20' }), res);
+    expect(res.statusCode).toBe(422);
+    expect(res.body.message).toContain('May 1 – October 16');
   });
 
   it("refuses to move another customer's visit", async () => {
@@ -453,7 +468,7 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
     const v = await seedVisit(theirs, '2026-09-10');
 
     const res = mockResWithHeaders();
-    await handler(await post(mine, { op: 'reschedule', visit_id: v, date: '2026-09-17' }), res);
+    await handler(await post(mine, { op: 'reschedule', visit_id: v, date: futureInSeasonISO(7) }), res);
 
     expect(res.statusCode).toBe(422);
     const [row] = await getDb().select().from(visit).where(eq(visit.id, v));
@@ -464,7 +479,7 @@ describe('POST /api/me {op:reschedule} — change a clean date', () => {
     const id = await makeCustomer();
     const v = await seedVisit(id, '2026-08-13', 'done');
     const res = mockResWithHeaders();
-    await handler(await post(id, { op: 'reschedule', visit_id: v, date: '2026-09-17' }), res);
+    await handler(await post(id, { op: 'reschedule', visit_id: v, date: futureInSeasonISO(7) }), res);
     expect(res.statusCode).toBe(409);
   });
 

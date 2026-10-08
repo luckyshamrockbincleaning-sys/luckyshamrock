@@ -107,6 +107,18 @@ function firstSeasonalDate(pickupDay) {
   return null;
 }
 
+// The operator sets each year's opening and closing day (GET /api/book →
+// season.windows, mirrors lib/season.ts). A year with no window — or the page
+// before the lookup lands — uses the default May 1 – Oct 31. The server still
+// has the final say on every booking.
+function inSeasonLocal(d, season) {
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const w = season && Array.isArray(season.windows) && season.windows.find((x) => x.year === d.getFullYear());
+  const start = w ? w.start : `${d.getFullYear()}-05-01`;
+  const end = w ? w.end : `${d.getFullYear()}-10-31`;
+  return iso >= start && iso <= end;
+}
+
 function fmtNice(d) {
   return d ? d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' }) : '—';
 }
@@ -232,8 +244,17 @@ const Booking = ({ tweaks }) => {
   const isOneoff = service === 'one-time';
   const isSeasonal = service === 'three-wash';
 
-  // Real calendar for one-off bookings: every future non-Sunday day is bookable.
-  // (No fake "open slots" — the system has no per-day capacity model at v1.)
+  const [season, setSeason] = useStateBk(null);
+  React.useEffect(() => {
+    fetch('/api/book', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => { if (b && b.season) setSeason(b.season); })
+      .catch(() => {});
+  }, []);
+  const seasonText = (season && season.label) || 'May 1 – October 31';
+
+  // Real calendar for one-off bookings: every future in-season non-Sunday day
+  // is bookable. (No fake "open slots" — no per-day capacity model at v1.)
   const days = useMemo(() => {
     const arr = [];
     const t0 = new Date();
@@ -246,10 +267,16 @@ const Booking = ({ tweaks }) => {
       const past = d < t0;
       const isSun = d.getDay() === 0; // no Sunday service
       const preLaunch = d < launchDate(); // routes start July 23
-      arr.push({ date: d, day: d.getDate(), disabled: past || isSun || preLaunch });
+      const offSeason = !inSeasonLocal(d, season);
+      arr.push({ date: d, day: d.getDate(), disabled: past || isSun || preLaunch || offSeason });
     }
     return arr;
-  }, []);
+  }, [season]);
+  // The season lookup can land after a day was picked (or restored after a
+  // bank redirect); a day it rules out must not stay selected.
+  React.useEffect(() => {
+    if (selectedDay !== null && days[selectedDay] && days[selectedDay].disabled) setSelectedDay(null);
+  }, [days]);
 
   const selectedService = services.find(s => s.id === service);
   // Per-clean price, charged AFTER each clean — mirrors lib/pricing.ts
@@ -566,7 +593,7 @@ const Booking = ({ tweaks }) => {
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Eco-safe, kid-safe, pet-safe formula</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Pause or cancel anytime in your account</li>
               <li><span className="perk-icon"><Icon.Check size={14}/></span>Service area: all of {tweaks.city}</li>
-              <li><span className="perk-icon"><Icon.Check size={14}/></span>Cleaning season runs May 1 – October 31 — we pause over winter and you're not charged</li>
+              <li><span className="perk-icon"><Icon.Check size={14}/></span>Cleaning season runs {seasonText} — we pause over winter and you're not charged</li>
             </ul>
           </div>
 
@@ -671,7 +698,7 @@ const Booking = ({ tweaks }) => {
                       of commitment, so nobody discovers it in November. */}
                   {!isOneoff && (
                     <div className="booking-summary-row" style={{fontSize: 12, color: 'var(--ink-3)'}}>
-                      <span>Season runs May 1 – Oct 31. We pause for winter — no cleans, no charges — and email you before we're back.</span>
+                      <span>Season runs {seasonText}. We pause for winter — no cleans, no charges — and email you before we're back.</span>
                     </div>
                   )}
                 </div>

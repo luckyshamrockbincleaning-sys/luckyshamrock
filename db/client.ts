@@ -63,6 +63,7 @@ export async function truncateAllForTests(): Promise<void> {
     visit,
     subscription,
     customer,
-    waitlist
+    waitlist,
+    season
   CASCADE`;
 }

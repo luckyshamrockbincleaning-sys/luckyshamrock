@@ -10,7 +10,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { and, eq, gt, lte, inArray, asc, desc, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, lte, inArray, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { customer, subscription, visit, payment, magicLinkToken } from '../db/schema.js';
 import {
@@ -49,7 +49,8 @@ import type { EmailAttachment } from './email.js';
 import { isPlaceholderEmail } from './walkup-email.js';
 import { generateMagicLinkToken, hashToken } from './tokens.js';
 import { spendCredit, releaseCredit, awardReferralIfEarned, generateReferralCode } from './referral.js';
-import { isInSeason, seasonEnd } from './season.js';
+import { isInSeason, seasonEnd, seasonFor, type SeasonCalendar } from './season.js';
+import { loadSeasonCalendar, saveSeason, seasonWindowSchema } from './season-store.js';
 import { normalizeBinTypes, describeBins, binLabelsFor } from './bin-types.js';
 import { putVisitPhoto, deleteVisitPhotos, sweepStalePhotos, fetchVisitPhoto } from './photo-store.js';
 import { generateVisitDates, type PickupDay } from './schedule.js';
@@ -739,7 +740,8 @@ export async function handleSeasonStart(req: VercelRequest, res: VercelResponse)
   try {
     const db = getDb();
     const now = new Date();
-    const cutoff = seasonEnd(now);
+    const calendar = await loadSeasonCalendar();
+    const cutoff = seasonEnd(now, calendar);
 
     const subs = await db
       .select({
@@ -780,7 +782,7 @@ export async function handleSeasonStart(req: VercelRequest, res: VercelResponse)
         pickupDay: sub.pickupDay as PickupDay,
         cadence: sub.cadence as Cadence,
         count: 12,
-      }).filter((d) => isInSeason(d) && d <= cutoff);
+      }).filter((d) => isInSeason(d, calendar) && d <= cutoff);
 
       if (dates.length === 0) {
         // Called outside the season, or too late in it to fit a clean.
@@ -826,12 +828,80 @@ export async function handleSeasonStart(req: VercelRequest, res: VercelResponse)
       status: 'ok',
       subscriptions_opened: opened,
       visits_created: created,
-      in_season: isInSeason(now),
+      in_season: isInSeason(now, calendar),
     });
   } catch (err) {
     console.error('[operator/season] failed', err);
     res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GET/POST /api/operator/season-dates  → the season's opening and closing day
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * The operator sets each year's season from /ops; booking, /manage and the
+ * spring restart all read it (lib/season.ts). GET returns this year and next;
+ * POST `{start, end}` saves one year (the year comes from the dates).
+ *
+ * Moving a date never touches cleans already booked. Both verbs return
+ * `outside`: open visits from today on that now fall outside their year's
+ * season, so Shea can see who to call and skip or move each one from /ops.
+ */
+export async function handleSeasonDates(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+  if (!(await getOperatorSession(req))) {
+    res.status(401).json({ status: 'unauthorized' });
+    return;
+  }
+  let saved = false;
+  if (req.method === 'POST') {
+    const parsed = seasonWindowSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ status: 'invalid', errors: parsed.error.flatten().fieldErrors });
+      return;
+    }
+    try {
+      await saveSeason(parsed.data.start, parsed.data.end);
+      saved = true;
+    } catch (err) {
+      console.error('[operator/season-dates] save failed', err);
+      res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+      return;
+    }
+  }
+  try {
+    const calendar = await loadSeasonCalendar();
+    const year = Number(operatorTodayISO().slice(0, 4));
+    res.status(200).json({
+      status: 'ok',
+      saved,
+      seasons: [year, year + 1].map((y) => ({
+        ...seasonFor(y, calendar),
+        custom: calendar.some((w) => w.year === y),
+      })),
+      outside: await visitsOutsideSeason(calendar),
+    });
+  } catch (err) {
+    console.error('[operator/season-dates] failed', err);
+    res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+  }
+}
+
+async function visitsOutsideSeason(calendar: SeasonCalendar) {
+  const today = new Date(`${operatorTodayISO()}T00:00:00Z`);
+  const rows = await getDb()
+    .select({ id: visit.id, scheduledFor: visit.scheduledFor, name: customer.name })
+    .from(visit)
+    .innerJoin(customer, eq(visit.customerId, customer.id))
+    .where(and(gte(visit.scheduledFor, today), inArray(visit.status, ACTIONABLE_VISIT_STATUSES)))
+    .orderBy(asc(visit.scheduledFor));
+  return rows
+    .filter((r) => !isInSeason(r.scheduledFor, calendar))
+    .map((r) => ({ id: r.id, name: r.name, scheduled_for: r.scheduledFor.toISOString().slice(0, 10) }));
 }
 
 // ─────────────────────────────────────────────────────────────────────

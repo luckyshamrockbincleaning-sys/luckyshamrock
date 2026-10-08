@@ -6,6 +6,7 @@ import {
   handleAttention,
   handleHistory,
   handleSeasonStart,
+  handleSeasonDates,
   handleEditCustomer,
   handleAct,
   handleNewJob,
@@ -22,6 +23,8 @@ import {
  *   POST /api/operator/act      ← visit actions; body {id, op, text?} (op includes retry)
  *   POST /api/operator/job       ← walk-up: create customer + one-off visit
  *   POST /api/operator/upload    ← one Done photo, stored as it is taken
+ *   POST /api/operator/season    ← open the new season (book every active plan)
+ *   GET|POST /api/operator/season-dates ← view / set a year's opening and closing day
  *
  * Why one segment: in the Vercel runtime a catch-all `[...path]` route 404'd at
  * the platform for any 2+/-segment URL (e.g. /visit/:id/:action) — the function
@@ -42,6 +45,7 @@ const ONE_SEG: Record<string, (req: VercelRequest, res: VercelResponse) => Promi
   attention: handleAttention,
   history: handleHistory,
   season: handleSeasonStart,
+  'season-dates': handleSeasonDates,
   customer: handleEditCustomer,
   act: handleAct,
   job: handleNewJob,

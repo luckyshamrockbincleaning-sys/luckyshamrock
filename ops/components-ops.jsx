@@ -1123,7 +1123,100 @@ function AttentionCard({ item, onAction, busy }) {
   );
 }
 
-// Spring restart. Bookings stop at Oct 31; this books the new season for every
+// The season's opening and closing day, per year. Booking, /manage and the
+// spring restart all follow these; a year left alone runs May 1 – Oct 31.
+// Saving never touches cleans already booked — the card lists any that now fall
+// outside the season so the operator can skip or move them from the route.
+function SeasonDatesCard() {
+  const [seasons, setSeasons] = useState(null); // [{year, start, end, custom}]
+  const [outside, setOutside] = useState([]);
+  const [busyYear, setBusyYear] = useState(null);
+  const [msg, setMsg] = useState('');
+  const field = { padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', fontSize: 15, width: '100%' };
+
+  function apply(b) {
+    setSeasons(b.seasons);
+    setOutside(b.outside || []);
+  }
+
+  useEffect(() => {
+    fetch('/api/operator/season-dates', { credentials: 'same-origin' })
+      .then((r) => r.json().then((b) => (r.ok ? apply(b) : setMsg(`Could not load season dates: ${b.message || r.status}`))))
+      .catch((e) => setMsg(`Could not load season dates: ${e.message}`));
+  }, []);
+
+  function edit(year, key, value) {
+    setSeasons(seasons.map((w) => (w.year === year ? { ...w, [key]: value } : w)));
+  }
+
+  async function save(w) {
+    setBusyYear(w.year);
+    setMsg('');
+    try {
+      const r = await fetch('/api/operator/season-dates', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ start: w.start, end: w.end }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const first = b.errors && Object.values(b.errors).flat()[0];
+        throw new Error(first || b.message || `${r.status}`);
+      }
+      apply(b);
+      setMsg(`Saved — ${w.year} season runs ${formatDate(w.start)} to ${formatDate(w.end)}.`);
+    } catch (e) {
+      setMsg(`Could not save: ${e.message}`);
+    } finally {
+      setBusyYear(null);
+    }
+  }
+
+  return (
+    <div className="ops-card" style={{ marginBottom: 12 }}>
+      <h2 style={{ marginTop: 0, fontSize: 17 }}>Season dates</h2>
+      <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+        Customers can only book and move cleans between these days. Changing them
+        doesn't touch cleans already booked.
+      </p>
+      {!seasons && !msg && <div className="muted" style={{ fontSize: 13 }}>Loading…</div>}
+      {seasons && seasons.map((w) => (
+        <div key={w.year} style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>
+            {w.year}{!w.custom && <span className="muted" style={{ fontWeight: 400 }}> · standard dates</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ flex: '1 1 130px', fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+              Opens
+              <input style={field} type="date" min={`${w.year}-01-01`} max={`${w.year}-12-31`} value={w.start}
+                onChange={(e) => edit(w.year, 'start', e.target.value)} />
+            </label>
+            <label style={{ flex: '1 1 130px', fontSize: 13, color: 'var(--ink-3, #6b6b6b)' }}>
+              Last day
+              <input style={field} type="date" min={`${w.year}-01-01`} max={`${w.year}-12-31`} value={w.end}
+                onChange={(e) => edit(w.year, 'end', e.target.value)} />
+            </label>
+            <button className="btn btn-primary ops-btn" disabled={busyYear !== null} onClick={() => save(w)}>
+              {busyYear === w.year ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      ))}
+      {msg && <div style={{ marginTop: 4, fontSize: 13 }}>{msg}</div>}
+      {outside.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 13 }}>
+          <strong>Booked outside the season</strong> — still booked and will show on the route as usual:
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {outside.map((v) => <li key={v.id}>{v.name} · {formatDate(v.scheduled_for)}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Spring restart. Bookings stop at the season's last day; this books the new season for every
 // active plan and emails those customers. Lives behind a confirm because it
 // touches every subscriber at once — though it is safe to run twice (a plan
 // that already has visits this season is skipped, and the email is idempotent).
@@ -1163,8 +1256,8 @@ function SeasonOpenCard() {
     <div className="ops-card" style={{ marginBottom: 12 }}>
       <h2 style={{ marginTop: 0, fontSize: 17 }}>Start of season</h2>
       <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-        Cleaning runs May 1 – Oct 31. Tap this in the spring once the ground has
-        thawed — it books the new season for every active plan and emails those
+        Tap this in the spring once the ground has thawed — it books the new
+        season (from the dates above) for every active plan and emails those
         customers.
       </p>
       <button className="btn btn-primary ops-btn" disabled={busy} onClick={open}>
@@ -1414,6 +1507,7 @@ function OpsApp() {
 
       <Flash kind={flash.kind} text={flash.text} onDismiss={() => setFlash({ kind: '', text: '' })} />
 
+      {view === 'history' && <SeasonDatesCard />}
       {view === 'history' && <SeasonOpenCard />}
 
       {view === 'today' && (

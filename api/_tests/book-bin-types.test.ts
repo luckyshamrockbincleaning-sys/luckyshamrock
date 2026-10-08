@@ -49,7 +49,7 @@ describe('POST /api/book — which bins', () => {
   it('stores them on the visit for a one-off, which has no subscription', async () => {
     const res = mockRes();
     await handler(
-      req({ ...base, plan: 'oneoff', oneoff_date: '2026-09-16', bin_count: 1, bin_types: ['organics'] }),
+      req({ ...base, plan: 'oneoff', oneoff_date: '2099-07-15', bin_count: 1, bin_types: ['organics'] }),
       res,
     );
 
