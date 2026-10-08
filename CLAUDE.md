@@ -11,7 +11,7 @@ BinWash side-business — but built standalone, not on the BinWash Django stack.
 - **Static site** at repo root (`index.html` + `app.jsx` + `components-*.jsx` +
   `styles.css`). React via Babel-standalone in the browser. No build step.
 - **Serverless API** in `api/`. TypeScript files become Vercel Functions
-  (Node 20 runtime).
+  (Node 24 runtime — Vercel discontinued 20.x; `engines.node` in package.json must stay on a supported major or every deploy fails in ~2s).
 - **Database** = Neon Postgres. Accessed via `db/client.ts` (lazy singleton).
 - **Migrations** = `drizzle-kit` (`npm run db:generate`, `npm run db:push`).
 - **Tests** = `vitest`, files live in `**/_tests/**/*.test.ts` (nested dirs

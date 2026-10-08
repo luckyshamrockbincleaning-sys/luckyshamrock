@@ -5,7 +5,7 @@
   "description": "Lucky Shamrock Bin Cleaning — marketing site + booking system",
   "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "scripts": {
     "test": "dotenv -e .env.local -- vitest run",
