@@ -4,7 +4,7 @@ import { mockReq, mockRes } from './_helpers.js';
 import { truncateAllForTests } from './_db_cleanup.js';
 import { getDb } from '../../db/client.js';
 import { customer, subscription, visit } from '../../db/schema.js';
-import { magicLinkToken, notificationLog } from '../../db/schema.js';
+import { magicLinkToken, notificationLog, season } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 beforeAll(() => {
@@ -131,11 +131,36 @@ describe('POST /api/book — happy path', () => {
     expect(visits[0]!.binCount).toBe(2);
   });
 
-  it('returns 405 for non-POST', async () => {
-    const req = mockReq<typeof handler>({ method: 'GET' });
+  it('returns 405 for methods other than GET and POST', async () => {
+    const req = mockReq<typeof handler>({ method: 'PUT' });
     const res = mockRes<typeof handler>();
     await handler(req, res);
     expect(res.statusCode).toBe(405);
+  });
+
+  it('GET returns the season, using the operator dates when set', async () => {
+    const year = new Date().getUTCFullYear();
+    await getDb().insert(season).values({ year, startsOn: `${year}-05-01`, endsOn: `${year}-10-16` });
+    const req = mockReq<typeof handler>({ method: 'GET' });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as { season: { windows: { year: number; end: string }[] } };
+    expect(body.season.windows[0]).toEqual({ year, start: `${year}-05-01`, end: `${year}-10-16` });
+    expect(body.season.windows[1]!.end).toBe(`${year + 1}-10-31`);
+  });
+
+  it('drops a one-off date after the operator closes the season', async () => {
+    await getDb().insert(season).values({ year: 2099, startsOn: '2099-05-01', endsOn: '2099-07-10' });
+    const req = mockReq<typeof handler>({
+      method: 'POST',
+      body: { ...validBody, plan: 'oneoff', oneoff_date: '2099-07-15' },
+    });
+    const res = mockRes<typeof handler>();
+    await handler(req, res);
+    expect(res.statusCode).toBe(422);
+    expect(res.body).toMatchObject({ status: 'out_of_season' });
+    expect((res.body as { message: string }).message).toContain('May 1 – July 10');
   });
 
   it('issues a magic_link_token and sends exactly one booking_confirmed email', async () => {

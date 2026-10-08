@@ -7,7 +7,8 @@ import { getSessionCustomerId } from '../lib/session.js';
 import { formatClearSessionCookieHeader } from '../lib/cookies.js';
 import { generateSeasonalDates, type Cadence } from '../lib/schedule.js';
 import { effectiveStartDate } from '../lib/launch.js';
-import { isInSeason, seasonEnd, nextSeasonStart, SEASON_LABEL } from '../lib/season.js';
+import { isInSeason, seasonEnd, seasonFor, seasonLabel, seasonSummary } from '../lib/season.js';
+import { loadSeasonCalendar } from '../lib/season-store.js';
 import { createStripeCustomer, createSetupIntent } from '../lib/billing.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 
@@ -97,14 +98,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(400).json({ status: 'invalid', message: "We don't clean on Sundays — pick another day." });
       return;
     }
-    if (!isInSeason(target)) {
-      res.status(422).json({
-        status: 'out_of_season',
-        message: 'Our cleaning season runs May 1 to October 31. Please pick a date in that window.',
-      });
-      return;
-    }
     try {
+      const calendar = await loadSeasonCalendar();
+      if (!isInSeason(target, calendar)) {
+        res.status(422).json({
+          status: 'out_of_season',
+          message: `Our cleaning season runs ${seasonLabel(seasonFor(target.getUTCFullYear(), calendar))}. Please pick a date in that window.`,
+        });
+        return;
+      }
       const db = getDb();
       const [v] = await db.select().from(visit).where(eq(visit.id, visitId));
       if (!v) {
@@ -165,6 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   try {
     const db = getDb();
+    const calendar = await loadSeasonCalendar();
 
     const [me] = await db.select().from(customer).where(eq(customer.id, customerId));
     if (!me) {
@@ -224,9 +227,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         // 2. Current season only: a customer mid-season must not see next
         //    year's dates appear months early. Their winter view says "paused
         //    until May"; next season is generated when it opens.
-        const cutoff = seasonEnd(today);
+        const cutoff = seasonEnd(today, calendar);
         newDates = newDates.filter((d) => {
-          if (!isInSeason(d)) return false;
+          if (!isInSeason(d, calendar)) return false;
           // The Three Wash Season is an annual product (May/Jul/Sep); its
           // washes legitimately cross into next year. Only the rolling
           // cadences are held to the current season.
@@ -348,11 +351,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       })),
       // Season state, so /manage can explain a winter with no visits rather
       // than showing a bare "Nothing scheduled." to an active subscriber.
-      season: {
-        in_season: isInSeason(new Date()),
-        label: SEASON_LABEL,
-        next_start: nextSeasonStart(new Date()).toISOString().slice(0, 10),
-      },
+      season: seasonSummary(new Date(), calendar),
       past_visits: pastVisits.map((v) => ({
         id: v.id,
         scheduled_for: v.scheduledFor.toISOString().slice(0, 10),

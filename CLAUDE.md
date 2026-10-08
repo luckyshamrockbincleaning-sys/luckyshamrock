@@ -473,6 +473,26 @@ than a re-entered card) and again at final confirmation. Rules that matter:
 - A photo is present if it has **bytes OR a url** (`hasShot` in
   `ops/components-ops.jsx`). Checking `.photo` alone disables Done after upload.
 
+## Season dates (2026-10-08)
+
+- **The operator sets each year's opening and closing day** from /ops (History
+  tab → "Season dates"), stored one row per year in the `season` table
+  (migration 0016). A year with no row runs **May 1 – Oct 31**. Both edges
+  inclusive.
+- **`lib/season.ts` stays pure**: every function takes the loaded
+  `SeasonCalendar` (defaults if omitted). `lib/season-store.ts` does the I/O —
+  `loadSeasonCalendar()` once per request, **failing open to the defaults** so a
+  broken lookup never loses a booking. Any new code that schedules or accepts a
+  date must pass the calendar, or it silently uses May 1 – Oct 31.
+- **Routes, no new function (12/12):** `GET|POST /api/operator/season-dates`
+  (view this year + next / save `{start, end}`), and **`GET /api/book`** returns
+  `season` for the booking page's calendar and copy. `/api/me` returns the same
+  `season` summary (`start`/`end`/`label` = the upcoming season) for /manage.
+- **Moving a date never touches booked cleans.** The response lists open visits
+  now outside the season (`outside`); the operator decides what to do with them.
+- **Customer copy reads the label**, never a hard-coded "October 31": booking
+  page (`seasonText`), /manage picker + hint, and both `out_of_season` messages.
+
 ## Active work
 
 Current phase: see `docs/superpowers/plans/` for the most recent dated plan.

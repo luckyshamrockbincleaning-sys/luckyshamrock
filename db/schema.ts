@@ -267,6 +267,26 @@ export const waitlist = pgTable('waitlist', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// The operator's opening and closing day for one year's cleaning season, set
+// from /ops because the weather decides them. A year with no row runs the
+// default May 1 – Oct 31 (lib/season.ts). Both edges inclusive.
+export const season = pgTable(
+  'season',
+  {
+    year: integer('year').primaryKey(),
+    startsOn: date('starts_on', { mode: 'string' }).notNull(),
+    endsOn: date('ends_on', { mode: 'string' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    ordered: check('season_starts_before_ends', sql`${t.startsOn} <= ${t.endsOn}`),
+    sameYear: check(
+      'season_within_year',
+      sql`extract(year from ${t.startsOn}) = ${t.year} and extract(year from ${t.endsOn}) = ${t.year}`,
+    ),
+  }),
+);
+
 // One row per charge attempt against a visit (Phase 6 — Stripe). Amounts are in
 // cents. We bill per-visit (not via Stripe Subscriptions) so skips, seasonal
 // scheduling, and on-the-spot discounts stay under our control. The Stripe

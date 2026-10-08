@@ -23,7 +23,8 @@ import {
 import { isStripeConfigured } from '../lib/stripe.js';
 import { formatFriendlyDate } from '../lib/dates.js';
 import { effectiveStartDate } from '../lib/launch.js';
-import { isInSeason, seasonEnd } from '../lib/season.js';
+import { isInSeason, seasonEnd, seasonFor, seasonLabel, seasonSummary, upcomingSeason } from '../lib/season.js';
+import { loadSeasonCalendar } from '../lib/season-store.js';
 import { normalizeBinTypes } from '../lib/bin-types.js';
 import { checkEmailDomain, undeliverableEmailMessage } from '../lib/email-domain.js';
 
@@ -47,6 +48,19 @@ export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
 ): Promise<void> {
+  // GET is the booking page's season lookup: the operator sets each year's
+  // opening and closing day, so the calendar can't hard-code them. Folded in
+  // here rather than a new file because the deploy is at 12/12 functions.
+  if (req.method === 'GET') {
+    try {
+      const calendar = await loadSeasonCalendar();
+      res.status(200).json({ status: 'ok', season: seasonSummary(new Date(), calendar) });
+    } catch (err) {
+      console.error('[book] season lookup failed', err);
+      res.status(500).json({ status: 'error', message: 'Something went wrong on our end. Please try again.' });
+    }
+    return;
+  }
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'method_not_allowed' });
     return;
@@ -293,10 +307,11 @@ export default async function handler(
     // in August must not see dates ten months out when their winter view will
     // say "paused until May". Next season is generated when it opens.
     // A plan bought in September legitimately yields only a clean or two.
-    const seasonCutoff = seasonEnd(startDate);
+    const calendar = await loadSeasonCalendar();
+    const seasonCutoff = seasonEnd(startDate, calendar);
     visitDates = visitDates.filter((d) => {
-      // Nothing may ever fall outside May 1 - Oct 31.
-      if (!isInSeason(d)) return false;
+      // Nothing may ever fall outside the operator's season.
+      if (!isInSeason(d, calendar)) return false;
       // Beyond that, the current-season cap applies only to the ROLLING
       // cadences (monthly/bimonthly/quarterly), which we auto-fill to a target
       // count — those must not run ahead into a season we haven't opened.
@@ -309,7 +324,13 @@ export default async function handler(
     if (visitDates.length === 0) {
       res.status(422).json({
         status: 'out_of_season',
-        message: "Our cleaning season runs May 1 to October 31. Join the waitlist and we'll let you know when we're back.",
+        // A one-off is judged against the season of the day picked; a plan
+        // against the season it starts in.
+        message: `Our cleaning season runs ${seasonLabel(
+          data.plan === 'oneoff'
+            ? seasonFor(Number(data.oneoff_date!.slice(0, 4)), calendar)
+            : upcomingSeason(startDate, calendar),
+        )}. Join the waitlist and we'll let you know when we're back.`,
       });
       return;
     }

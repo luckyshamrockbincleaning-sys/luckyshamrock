@@ -370,7 +370,7 @@ function OffSeasonCard({ season, hasSubscription }) {
   );
 }
 
-function VisitsCard({ visits, onSkip, onReschedule, busyVisitId }) {
+function VisitsCard({ visits, season, onSkip, onReschedule, busyVisitId }) {
   // Which visit currently has its date picker open, and what's typed in it.
   const [editing, setEditing] = useState(null);
   const [draftDate, setDraftDate] = useState('');
@@ -385,14 +385,15 @@ function VisitsCard({ visits, onSkip, onReschedule, busyVisitId }) {
     );
   }
 
-  // The season, mirrored from lib/season.ts. Bounding the picker means a
-  // customer can't pick a winter date and get rejected after the fact.
+  // The season the operator set (GET /api/me → season.start/end, the upcoming
+  // season). Bounding the picker means a customer can't pick a winter date and
+  // get rejected after the fact. The fallback is the default May 1 – Oct 31.
   const now = new Date();
-  const seasonYear = now.getMonth() + 1 > 10 ? now.getFullYear() + 1 : now.getFullYear();
   const todayISO = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  const seasonOpen = `${seasonYear}-05-01`;
+  const fallbackYear = now.getMonth() + 1 > 10 ? now.getFullYear() + 1 : now.getFullYear();
+  const seasonOpen = (season && season.start) || `${fallbackYear}-05-01`;
   const minDate = todayISO > seasonOpen ? todayISO : seasonOpen;
-  const maxDate = `${seasonYear}-10-31`;
+  const maxDate = (season && season.end) || `${fallbackYear}-10-31`;
 
   async function save(visitId) {
     setErr('');
@@ -456,8 +457,8 @@ function VisitsCard({ visits, onSkip, onReschedule, busyVisitId }) {
               </div>
               {err && <div style={{color: '#7A2222', fontSize: 13, marginTop: 6}}>{err}</div>}
               <div style={{fontSize: 12, color: 'var(--ink-3, #6b6b6b)', marginTop: 6}}>
-                We clean May through October, and never on a Sunday. Only this
-                visit moves — the rest of your schedule stays put.
+                We clean {(season && season.label) || 'May 1 – October 31'}, and never
+                on a Sunday. Only this visit moves — the rest of your schedule stays put.
               </div>
             </div>
           )}
@@ -731,6 +732,7 @@ function ManageApp() {
           />
           <VisitsCard
             visits={state.me.upcoming_visits}
+            season={state.me.season}
             onSkip={onSkip}
             onReschedule={onReschedule}
             busyVisitId={busyVisitId}
